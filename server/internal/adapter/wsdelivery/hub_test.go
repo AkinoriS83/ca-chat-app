@@ -149,7 +149,7 @@ func TestRegister_AgainMovesConnectionToNewUser(t *testing.T) {
 	}
 }
 
-// 列に加えられなかった端末の接続は、閉じる。他の端末への配信は、妨げない(DD-05)。
+// 列に加えられなかった端末の接続は、閉じる。他の端末への配信は、妨げない。
 func TestDeliver_ClosesConnectionThatCannotQueue(t *testing.T) {
 	hub := newTestHub()
 	ctx := context.Background()

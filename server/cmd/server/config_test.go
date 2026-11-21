@@ -85,7 +85,7 @@ func TestLoadConfig_AppOrigin(t *testing.T) {
 	}
 }
 
-// 仮実装(WS-P2): 待ち受け先は、ループバックのアドレスに限る(DD-27)。
+// 仮実装(WS-P2): 待ち受け先は、ループバックのアドレスに限る。
 func TestLoadConfig_ListenAddrMustBeLoopback(t *testing.T) {
 	tests := []struct {
 		addr string
