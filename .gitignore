@@ -1,7 +1,7 @@
 # 秘密(ローカルの開発環境の設定)。見本は .env.example
 .env
 
-# Makefile が導入する Go の道具(DD-19)
+# Makefile が導入する Go の道具(Makefile の tools)
 /bin/
 
 # npm の依存物

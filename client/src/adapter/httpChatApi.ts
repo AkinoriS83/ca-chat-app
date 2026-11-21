@@ -13,7 +13,10 @@ function messagesUrl(peer: string): string {
 
 /** サーバーへの操作を、HTTP で行う(ADR-002)。 */
 export class HttpChatApi implements ChatApi {
-  /** 履歴の取得は、200 のほかを、すべて「取得できなかった」として返す。 */
+  /**
+   * 履歴の取得は、200 のほかを、すべて「取得できなかった」として返す。
+   * 仮実装(WS-P4): 会話のすべてのメッセージを、一度に取得する。
+   */
   async listMessages(actor: string, peer: string): Promise<HistoryResult> {
     try {
       const response = await fetch(messagesUrl(peer), {

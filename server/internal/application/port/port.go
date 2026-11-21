@@ -26,6 +26,7 @@ type ConversationReader interface {
 
 // Transactor は、一体として行う操作を、1つの関数として受ける。
 // fn がエラーを返すと、その中で行った操作を、すべて取り消す。返さなければ、確定する(ADR-012)。
+// 確定は、ctx の取り消しに従わない。fn がエラーを返さずに戻った後は、ctx が取り消されても、確定を試みる。
 type Transactor interface {
 	InTransaction(ctx context.Context, fn func(ctx context.Context, w ConversationWriter) error) error
 }

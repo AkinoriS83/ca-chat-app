@@ -117,8 +117,11 @@ func TestRawRequests_GetCodeOnlyResponses(t *testing.T) {
 		{"OPTIONS *", "OPTIONS * HTTP/1.1\r\nHost: app.test\r\n\r\n", 404, "not_found"},
 		{"パーセントで符号化した ..", "GET /api/%2e%2e/api/direct-conversations/bob/messages HTTP/1.1\r\nHost: app.test\r\nX-Fixed-User: alice\r\n\r\n", 404, "not_found"},
 		{"パーセントで符号化した /", "GET /api/direct-conversations/bob%2Fmessages HTTP/1.1\r\nHost: app.test\r\nX-Fixed-User: alice\r\n\r\n", 404, "not_found"},
-		{"Host が、アプリのものでない", "GET /api/direct-conversations/bob/messages HTTP/1.1\r\nHost: other.example\r\n\r\n", 401, "unauthenticated"},
-		{"CONNECT", "CONNECT app.test:80 HTTP/1.1\r\nHost: app.test:80\r\n\r\n", 404, "not_found"},
+		{"Host が、アプリのものでない", "GET /api/direct-conversations/bob/messages HTTP/1.1\r\nHost: other.example\r\n\r\n", 403, "forbidden_origin"},
+		{"Host がない(HTTP/1.0)", "GET /api/direct-conversations/bob/messages HTTP/1.0\r\n\r\n", 403, "forbidden_origin"},
+		// CONNECT では、要求の対象(ホスト:ポート)が、Host として扱われる。ループバックのアドレスを指定して、
+		// Host の検証を通し、定義されていない方法としての応答を確かめる。
+		{"CONNECT", "CONNECT 127.0.0.1:80 HTTP/1.1\r\nHost: 127.0.0.1:80\r\n\r\n", 404, "not_found"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

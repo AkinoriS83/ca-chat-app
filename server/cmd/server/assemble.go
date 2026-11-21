@@ -41,9 +41,13 @@ func newHandler(p ports, appOrigin string, logger *slog.Logger) (http.Handler, e
 	// 定義されていないパスと方法の、受け皿。
 	mux.Handle("/", httpapi.NotFoundHandler())
 
-	// Origin の検証で、HTTP の操作と、WebSocket の接続先の両方を包む。
+	// Host と Origin の検証で、HTTP の操作と、WebSocket の接続先の両方を包む。
 	// 正規の形でないパスは、ServeMux より前で拒否する。
-	return httpapi.RequireAppOrigin(appOrigin)(httpapi.RequireCanonicalPath(mux)), nil
+	requireAppHost, err := httpapi.RequireAppHost(appOrigin)
+	if err != nil {
+		return nil, err
+	}
+	return requireAppHost(httpapi.RequireAppOrigin(appOrigin)(httpapi.RequireCanonicalPath(mux))), nil
 }
 
 // newHTTPServer は、handler を使う http.Server を作る。

@@ -23,6 +23,7 @@ export type SendRequest = {
 
 /** サーバーへの操作(履歴の取得、送信)。 */
 export interface ChatApi {
+  /** 仮実装(WS-P4): 会話のすべてのメッセージを、一度に取得する。フェーズ1で、分割しての取得に置き換える。 */
   listMessages(actor: string, peer: string): Promise<HistoryResult>
   sendMessage(request: SendRequest): Promise<SendResult>
 }

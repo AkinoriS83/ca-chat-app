@@ -54,8 +54,9 @@
 | 箇所 | 内容 | 正式実装で行うこと |
 |---|---|---|
 | `api/openapi.yaml` の `listDirectMessages` | 応答(`MessageList`)が、会話のすべてのメッセージを含む | 位置と件数を指定する形にする(PERF-2) |
+| `server/internal/application/usecase/read_history.go` の `HistoryReader.Read`(入力と出力は、`io.go` の `ReadHistoryInput`、`ReadHistoryOutput`) | 相手だけを受け、会話のすべてのメッセージを返す | 入力に、位置と件数を加える。出力を、分割して返す形にする |
 | `server/internal/application/port/port.go` の `ConversationReader.ListMessages` | 会話の識別子だけを受け、すべてのメッセージを返す | 位置と件数を受ける形にする |
 | `server/internal/adapter/postgres/store.go` の `ListMessages`、`server/internal/adapter/postgres/queries/messages.sql` の `ListMessages` | 件数を限らずに、問い合わせる | 主キー(会話、連番)の索引を使って、指定した位置から、一定の件数だけを取得する |
 | `server/internal/adapter/httpapi/handler.go` の `ListDirectMessages` | すべてのメッセージを、1つの応答で返す | 分割して返す |
-
-クライアントは、履歴を、1回の取得で読み込む前提です(`client/src/application/chatApp.ts` の `fetchHistory`)。分割しての取得に合わせて、改めます。
+| `client/src/application/port/chatApi.ts` の `ChatApi.listMessages`、`client/src/adapter/httpChatApi.ts` の `listMessages` | 相手だけを指定して、会話のすべてのメッセージを、1回の要求で取得する | 位置と件数を指定する形にする |
+| `client/src/application/chatApp.ts` の `fetchHistory` | 履歴を、1回の取得で読み込み、それを会話の全体として扱う | 分割しての取得に合わせて、読み込みと、配信との統合を改める |

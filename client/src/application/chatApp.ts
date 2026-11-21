@@ -249,6 +249,7 @@ export class ChatApp {
     }
   }
 
+  // 仮実装(WS-P4): 履歴を、1回の取得で読み込む。フェーズ1で、分割しての取得に置き換える。
   private fetchHistory(): void {
     this.historyWaiting = false
     const self = this.state.currentUser

@@ -77,6 +77,63 @@ func TestRequireAppOrigin(t *testing.T) {
 	}
 }
 
+func TestRequireAppHost(t *testing.T) {
+	tests := []struct {
+		name    string
+		host    string
+		allowed bool
+	}{
+		{"アプリのオリジンのホスト", "localhost:5173", true},
+		{"アプリのオリジンのホスト(大文字)", "LOCALHOST:5173", true},
+		{"ループバックのアドレス(IPv4)", "127.0.0.1:8080", true},
+		{"ループバックのアドレス(IPv4。ポートなし)", "127.0.0.1", true},
+		{"ループバックのアドレス(127.0.0.0/8)", "127.1.2.3:8080", true},
+		{"ループバックのアドレス(IPv6)", "[::1]:8080", true},
+		{"ループバックのアドレス(IPv6。ポートなし)", "[::1]", true},
+		{"第三者のサイトの名前", "attacker.example:8080", false},
+		{"第三者のサイトの名前(ポートなし)", "attacker.example", false},
+		{"アプリのホストと、ポートが違う", "localhost:8080", false},
+		{"アプリのホストの、ポートがない", "localhost", false},
+		{"アプリのホストを含む、別の名前", "localhost:5173.attacker.example", false},
+		{"ループバックのアドレスで始まる、別の名前", "127.0.0.1.attacker.example:8080", false},
+		{"ループバックでないアドレス", "192.0.2.1:8080", false},
+		{"すべてのアドレス", "0.0.0.0:8080", false},
+		{"Host がない", "", false},
+	}
+	requireAppHost, err := RequireAppHost(testAppOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := requireAppHost(okHandler())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodOptions} {
+				r := httptest.NewRequest(method, "/api/anything", nil)
+				r.Host = tt.host
+				rec := httptest.NewRecorder()
+
+				handler.ServeHTTP(rec, r)
+
+				if tt.allowed {
+					if rec.Code != http.StatusNoContent {
+						t.Fatalf("%s: 通さなかった: %d", method, rec.Code)
+					}
+					continue
+				}
+				requireErrorResponse(t, rec, http.StatusForbidden, "forbidden_origin")
+			}
+		})
+	}
+}
+
+func TestRequireAppHost_RejectsInvalidAppOrigin(t *testing.T) {
+	for _, origin := range []string{"", "localhost:5173", "/path", "http://"} {
+		if _, err := RequireAppHost(origin); err == nil {
+			t.Fatalf("正しくないオリジン(%q)を、受け付けた", origin)
+		}
+	}
+}
+
 func TestRequireCanonicalPath(t *testing.T) {
 	tests := []struct {
 		path    string

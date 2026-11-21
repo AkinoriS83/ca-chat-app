@@ -50,6 +50,8 @@
 次は、import の検査では、検出できません。コードを書くときと、レビューするときに、確かめてください。
 
 - ポートを実装する adapter(`postgres`、`wsdelivery`、`fixeduser`)から、domain の規則(`NewBody`、`ParseSendID`、`NewDirectPair` など)を呼ばない。domain を使うのは、型の受け渡しと、保管した値からの組み立てに限る。
+  - 例外は、1つである。adapter のテストが、ポートに渡す入力を用意するために、`NewDirectPair` を呼ぶことは、許す(`DirectPair` は、ほかに作る手段がない。ADR-005)。本文と送信の識別子は、テストでも、復元用の関数で作る。
+  - 確かめるには、`grep -rn 'domain\.\(NewBody\|ParseSendID\|NewDirectPair\)' server/internal/adapter` を使う。出力は、テストのファイルの `NewDirectPair` だけになる。
 - 復元用の関数(`RestoreBody`、`RestoreSendID`)を、usecase から呼ばない。呼ぶのは、ポートを実装する adapter と、テスト用のポートの実装だけとする。確かめるには、`grep -rn 'Restore\(Body\|SendID\)' server/internal` を使う。
 - トランザクションの関数(`Transactor.InTransaction` に渡す関数)の中で、渡された操作(`ConversationWriter`)のほかに、ポートを呼ばない。配信は、トランザクションのポートから戻った後に呼ぶ。
 - main(`server/cmd/server`)は、組み立てだけを行う。adapter には、そのパッケージが import してよい層のものだけを渡す。ユースケースを呼ぶ adapter(`httpapi`、`wsaccept`)には、ユースケースだけを渡し、ポートの実装を渡さない。adapter が自分でインターフェイスを定義して、他の adapter を受け取る形を、作らない。

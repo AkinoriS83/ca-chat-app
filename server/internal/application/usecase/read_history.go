@@ -20,6 +20,9 @@ func NewHistoryReader(users port.UserDirectory, reader port.ConversationReader) 
 
 // Read は、相手との1on1会話の、すべてのメッセージを、連番の順に返す。
 // 成立していない会話は、空の一覧を返す。会話は、成立させない(WS-06)。
+//
+// 仮実装(WS-P4): 分割せずに、一度に返す。フェーズ1で、入力(ReadHistoryInput)に位置と件数を加え、
+// 出力(ReadHistoryOutput)を、分割して返す形に改める。
 func (h *HistoryReader) Read(ctx context.Context, in ReadHistoryInput) (ReadHistoryOutput, error) {
 	actor, found, err := h.users.FindByHandle(ctx, in.Actor)
 	if err != nil {

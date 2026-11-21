@@ -31,6 +31,9 @@ func newTestStore(t *testing.T) (*Store, *pgxpool.Pool) {
 	return NewStore(pool), pool
 }
 
+// mustPair は、ポートに渡す、2人の組を作る。
+// adapter から domain の規則を呼ばない規約の、例外である(ADR-005)。DirectPair は、中の値を
+// パッケージの外から作れず、復元用の関数もないため、テストの入力の用意に限って、NewDirectPair を呼ぶ。
 func mustPair(t *testing.T, a, b domain.UserID) domain.DirectPair {
 	t.Helper()
 	pair, err := domain.NewDirectPair(a, b)
@@ -184,6 +187,59 @@ func TestAppendMessage_DuplicateSend(t *testing.T) {
 	}
 	if other.Seq != 2 {
 		t.Fatalf("連番が違う(取り消された追記が、欠番を作った): %d", other.Seq)
+	}
+}
+
+// 確定は、呼び出しの文脈の取り消しに従わない。fn が、エラーを返さずに戻った後は、
+// 端末が切断しても(要求の文脈が取り消されても)、確定し、結果を返す。
+// 取り消しに従うと、保管先では確定したのに、エラーを返すことがあり、そのメッセージは、配信されない。
+func TestInTransaction_CommitsEvenIfContextIsCanceledAfterOperations(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := store.InTransaction(ctx, func(ctx context.Context, w port.ConversationWriter) error {
+		conv, err := w.EstablishDirect(ctx, mustPair(t, userA, userB))
+		if err != nil {
+			return err
+		}
+		if _, err := w.AppendMessage(ctx, conv.ID, userA, domain.RestoreSendID(sendID1), domain.RestoreBody("x")); err != nil {
+			return err
+		}
+		// 操作を終えた後、確定の前に、端末が切断した。
+		cancel()
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("確定せずに、エラーを返した: %v", err)
+	}
+	if countRows(t, pool, "conversations") != 1 || countRows(t, pool, "messages") != 1 {
+		t.Fatal("確定していない")
+	}
+}
+
+// 取り消された文脈の下での操作は、失敗し、トランザクションは、取り消される。
+func TestInTransaction_RollsBackWhenOperationFailsByCanceledContext(t *testing.T) {
+	store, pool := newTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := store.InTransaction(ctx, func(ctx context.Context, w port.ConversationWriter) error {
+		conv, err := w.EstablishDirect(ctx, mustPair(t, userA, userB))
+		if err != nil {
+			return err
+		}
+		cancel()
+		_, err = w.AppendMessage(ctx, conv.ID, userA, domain.RestoreSendID(sendID1), domain.RestoreBody("x"))
+		return err
+	})
+
+	if err == nil {
+		t.Fatal("取り消された文脈の下での操作が、完了した")
+	}
+	if countRows(t, pool, "conversations") != 0 || countRows(t, pool, "messages") != 0 {
+		t.Fatal("取り消されていない")
 	}
 }
 

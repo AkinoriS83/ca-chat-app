@@ -8,6 +8,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -82,9 +83,16 @@ func (s *Store) FindMessageBySend(ctx context.Context, sender domain.UserID, sen
 	return toMessage(row), true, nil
 }
 
+// commitTimeout は、確定を待つ時間の上限である。
+const commitTimeout = 5 * time.Second
+
 // InTransaction は、fn を、1つのトランザクションの中で実行する。
 // fn がエラーを返すか、パニックした場合は取り消し、そうでなければ確定する。
 // 分離の水準は、既定(READ COMMITTED)とする。
+//
+// 確定は、ctx の取り消しに従わない(ADR-012)。確定を保管先に送った後に、待つのをやめると、
+// 保管先では確定したのに、エラーを返すことがある。呼び出した側は、完了できなかったものとして扱い、
+// 保管されたメッセージが、配信されない。代わりに、時間の上限を設ける。
 func (s *Store) InTransaction(ctx context.Context, fn func(ctx context.Context, w port.ConversationWriter) error) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -96,7 +104,9 @@ func (s *Store) InTransaction(ctx context.Context, fn func(ctx context.Context, 
 	if err := fn(ctx, &writer{queries: sqlcgen.New(tx)}); err != nil {
 		return err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commitTimeout)
+	defer cancel()
+	if err := tx.Commit(commitCtx); err != nil {
 		return newOpError("commit transaction", err)
 	}
 	return nil
