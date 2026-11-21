@@ -53,6 +53,7 @@ client/                          npm のパッケージ
   e2e/                           Playwright のテスト
 docs/                            文書
 scripts/                         Makefile から呼ぶ手順
+.claude/rules/                   AIへの、置き場所ごとの指示(該当するファイルを読み書きしたときに、読み込まれる)
 compose.yaml  Makefile  .env.example  CLAUDE.md  README.md
 ```
 

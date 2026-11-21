@@ -1,0 +1,97 @@
+---
+paths:
+  - "server/**"
+---
+
+# サーバー(Go)の指示
+
+現在の姿(パッケージ、ポート、3つの経路)は、[アーキテクチャ概要](../../docs/architecture.md)「サーバーの層」にあります。理由は、[ADR-005](../../docs/adr/ADR-005-layer-structure.md)(層と規則)、[ADR-012](../../docs/adr/ADR-012-transaction-boundary.md)(トランザクション)にあります。本書は、コードを書くときの判断と、import の検査では検出できない規約を挙げます。
+
+## 層と、置くもの
+
+依存は、外側から内側へだけ向きます。パッケージごとの「import してよい先」の全体は、アーキテクチャ概要の表と、`server/.golangci.deps.yml` にあります。列挙にない import は、違反です。
+
+| 層 | 置き場所 | 置くもの | import してよい先(要点) |
+|---|---|---|---|
+| domain | `internal/domain` | 利用者、会話、メッセージなどの型と、その規則(値の検証、判定) | 入出力を行わない標準ライブラリだけ |
+| application | `internal/application/port` | ポート(内側が定義し、adapter が実装するインターフェイス) | domain |
+| application | `internal/application/usecase` | ユースケース(操作の手順、規則を適用する順、拒否の判断)。入力・出力のデータ構造。拒否の種類 | port、domain |
+| adapter | `internal/adapter/<相手と役割>` | 外部の形式と、内側の形式の間の変換。入出力 | 役割による(下記) |
+| main | `cmd/server` | 設定の読み込み、組み立て、起動。サーバーの振る舞いのテスト | すべて |
+
+置き場所は、次の順に考えます。
+
+1. 外部の相手(HTTP、WebSocket、保管先、メールなど)の形式や、ライブラリを知っている必要があるか。あれば、adapter。
+2. 1つの操作の手順(確かめる順、複数のポートの呼び出し、拒否の種類への置き換え)か。そうであれば、usecase。
+3. 操作に依らず成り立つ、値や関係の規則か。そうであれば、domain。
+4. 迷ったとき、どこにも収まらないときは、置く前に、開発者に相談する。観察記録にも当たる。
+
+## domain
+
+- 規則を通してしか作れない型(`Body`、`SendID`、`DirectPair`)は、中の値を、パッケージの外から直接には作れない形にする。
+- 作る関数は、2種類ある。規則を確かめる関数(`NewBody`、`ParseSendID`、`NewDirectPair`)と、保管した値から、検証せずに組み立てる復元用の関数(`RestoreBody`、`RestoreSendID`)である。復元用の関数は、ポートを実装する adapter が、保管した値から組み立てる必要が、現にある型にだけ置く。テストのためだけには、加えない(OBS-016)。
+- 使える標準ライブラリは、設定に列挙したものに限る。`fmt`、`log/slog`、`os`、`net/http`、`database/sql` などは、import できない(application も同じ)。列挙にないものが要る場合は、開発者に確かめてから、設定に加える(入出力を行わないものに限る)。
+
+## application
+
+- **ポート**は、現に存在するユースケースが通過するものだけを置く。ポートの境界では、domain の型を、そのまま使う。専用のデータ構造は、置かない。
+- **ユースケースの入力と出力**は、usecase が定義する、ユースケースごとの専用のデータ構造とする。domain の型を、含めない。入力には、操作を行う利用者(`Actor`)を含める。例外は、接続を受け付けるユースケースの入力が含む、`port.ConnectionSink` の1つである(ADR-005)。
+- **拒否**は、`*RejectedError`(種類は、`Rejection`)で返す。完了できなかったことは、そのほかの `error` で返す。domain が返した規則の違反は、usecase が、拒否の種類に置き換える。
+- ユースケースを呼ぶ側には、インターフェイスを置かない。adapter は、usecase の具体的な型を呼ぶ。
+- 復元用の関数(`RestoreBody`、`RestoreSendID`)を、usecase から呼ばない。呼ぶのは、ポートを実装する adapter と、テスト用のポートの実装だけとする。確かめるには、`grep -rn 'Restore\(Body\|SendID\)' server/internal` を使う。
+- トランザクションの関数(`Transactor.InTransaction` に渡す関数)の中で、渡された操作(`ConversationWriter`)のほかに、ポートを呼ばない。配信は、トランザクションのポートから戻った後に呼ぶ。
+- ログは、出力しない。出力するのは、adapter と main である。
+- 存在の秘匿(R-2、AC-5)は、usecase が、存在しない場合と、認可されない場合を、同じ拒否の種類(`NotFound`)にすることで保つ。区別できる種類を、加えない。
+
+## adapter
+
+1つの adapter のパッケージは、次の2つの役割の、一方だけを行います。adapter のパッケージ同士は、import しません。両方が要る相手(WebSocket)は、パッケージを分けています。
+
+| 役割 | 今あるパッケージ | import してよい先 |
+|---|---|---|
+| ユースケースを呼ぶ | `httpapi`、`wsaccept` | usecase、`openapi`、受け持つ相手のライブラリ。port、domain、他の adapter は、import できない |
+| ポートを実装する | `postgres`、`wsdelivery`、`fixeduser` | port、domain、受け持つ相手のライブラリ(と、`openapi`、`sqlcgen`)。usecase、他の adapter は、import できない |
+
+- ポートを実装する adapter から、domain の規則(`NewBody`、`ParseSendID`、`NewDirectPair` など)を呼ばない。domain を使うのは、型の受け渡しと、保管した値からの組み立てに限る。
+  - 例外は、1つである。adapter のテストが、ポートに渡す入力を用意するために、`NewDirectPair` を呼ぶことは、許す(`DirectPair` は、ほかに作る手段がない。ADR-005)。本文と送信の識別子は、テストでも、復元用の関数で作る。
+  - 確かめるには、`grep -rn 'domain\.\(NewBody\|ParseSendID\|NewDirectPair\)' server/internal/adapter` を使う。出力は、テストのファイルの `NewDirectPair` だけになる。規則を確かめる関数を domain に加えたときは、この grep と、本書の列挙に加える。
+- adapter が自分でインターフェイスを定義して、他の adapter を受け取る形を、作らない(import を伴わずに、層を飛ばす経路になる)。
+- 同じ変換が、複数の adapter に要ることがある(メッセージを通信の形式にする変換は、`httpapi` と `wsdelivery` にある。拒否の応答を書く処理は、`httpapi` と `wsaccept` にある)。これは、規則の帰結であり、他の adapter の関数を使う近道を、取らない。それぞれに書き、食い違いは、`cmd/server` のテストで検出する。共有のためのパッケージを加えたくなった場合は、開発者に相談する。
+- 保管先の adapter は、保管先が返したエラーを、そのまま内側へ返さない。操作の名前と SQLSTATE だけを持つエラー(`postgres.OpError`)に、作り直して返す。この形を、保つ。
+- 1つのサーバーの中だけで保持する状態(接続中の端末、配信の宛先、プレゼンスなど)は、ポートを実装する adapter の中に置く。usecase と domain に、持たせない(PERF-3)。
+
+## main(`cmd/server`)
+
+- 組み立てだけを行う。業務の判断を、書かない。
+- adapter には、そのパッケージが import してよい層のものだけを渡す。ユースケースを呼ぶ adapter(`httpapi`、`wsaccept`)には、ユースケースだけを渡し、ポートの実装を渡さない。
+- 組み立ては、ポートの実装を受け取る関数(`assemble.go` の `newHandler`)にまとめてある。テストは、この関数に、差し替えた実装を渡す。
+
+## テストの置き場所
+
+| 確かめること | 置き場所 | 保管先 |
+|---|---|---|
+| domain の規則 | `internal/domain` | 使わない |
+| ユースケースの手順と分岐。ポートは、手で書いたテスト用の実装(`usecase/fakes_test.go`)に差し替える | `internal/application/usecase` | 使わない |
+| 保管先の adapter。制約とトランザクションに依る振る舞い | `internal/adapter/postgres` | 使う(`pgtest` が、テストごとのデータベースを用意する) |
+| ユースケースを呼ぶ adapter のうち、ユースケースを通らないもの(本文の復号、ミドルウェア、共通の応答、書き込み口) | `internal/adapter/httpapi`、`internal/adapter/wsaccept` | 使わない |
+| サーバーの振る舞い(受け入れ基準。拒否の種類と `code` の対応、認可、配信、ログ、保管の失敗) | `cmd/server` | 使う |
+
+- `httpapi` と `wsaccept` のパッケージの中のテストで、ユースケースを組み立てない(port と domain を import できない)。ユースケースを通る振る舞いは、`cmd/server` のテストで確かめる。
+- テストの手段は、Go の標準の仕組み(testing)とする。比較や、代替実装の生成のためのライブラリを、加えない(ADR-006)。
+- サーバーのテストは、`make test-server` で実行する(雛形のデータベースを作り直す)。`go test` を直接に実行する場合の手順は、README「サーバーのテストと、保管先」にある。
+- 受け入れ基準を確かめるテストは、どの基準のものかが分かるように、基準のIDを、コメントに書く。
+
+## ログに出力しないもの
+
+- メッセージの本文と、要求の本文(PRV-4、WS-33)。
+- 保管先が返したエラーの文言と詳細。行の内容(本文)が、含まれることがある。
+- 認証に用いる秘密、ログイン状態を示す資格、連絡先の確認・再設定のための一時的な資格(SEC-1。フェーズ1から適用する)。
+- 拒否の応答とエラー応答は、`code` だけを返す。文言、詳細、内部の情報を、含めない(WS-30)。
+
+## パッケージを加えるとき
+
+1. 層と、adapter であれば役割(ユースケースを呼ぶ、ポートを実装する)を決める。既存の形に収まらない場合は、開発者に相談する(ADRが要る)。
+2. `server/.golangci.deps.yml` に、3箇所を加える。そのパッケージの規則。import する側の、許可の一覧。`unlisted-package` からの除外。規則のない置き場所は、検査が、違反として扱う。
+3. 規則に違反する見本(`depcheck_sample_*.go`。ビルドタグ `depcheck_sample`。1つのファイルに、違反する import を、1つ)を加え、`make check-deps-selftest` で、検出されることを確かめる。
+4. アーキテクチャ概要の、ディレクトリと、「パッケージと、import してよい先」の表を更新する。
+5. 観察記録に、追記する(置き場所の判断、境界要素の追加に当たる)。

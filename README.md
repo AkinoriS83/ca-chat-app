@@ -10,14 +10,18 @@ Clean Architecture を実践して開発する、チャットアプリの雛形�
 
 | 文書 | 内容 |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | アーキテクチャ概要(現在の姿。層、ディレクトリ、import してよい先、実行環境) |
-| [docs/adr/](docs/adr/) | ADR(設計の判断) |
+| [docs/development-policy.md](docs/development-policy.md) | 開発方針(目的、フェーズ、非機能要件の方針、開発の流れ、文書の役割分担) |
+| [docs/hypothesis.md](docs/hypothesis.md) | 仮説(構造を先に採用する理由、適用範囲、観察方法) |
+| [docs/project-plan.md](docs/project-plan.md) | 企画書(機能スコープ、非機能要件の目標水準、完了条件、リスク) |
+| [docs/use-cases.md](docs/use-cases.md) | ユースケース記述 |
 | [docs/specs/walking-skeleton.md](docs/specs/walking-skeleton.md) | ウォーキングスケルトンの仕様と、受け入れ基準 |
+| [docs/adr/](docs/adr/) | ADR(設計の判断) |
+| [docs/architecture.md](docs/architecture.md) | アーキテクチャ概要(現在の姿。層、ディレクトリ、import してよい先、実行環境) |
 | [docs/temporary-implementations.md](docs/temporary-implementations.md) | 仮実装の箇所の一覧 |
 | [docs/observations.md](docs/observations.md) | 観察記録 |
 | [docs/dependency-check-log.md](docs/dependency-check-log.md) | 依存規則の検査が、違反を検出したときの記録 |
 | [api/openapi.yaml](api/openapi.yaml) | 通信の形式の定義 |
-| [CLAUDE.md](CLAUDE.md) | AIへの常設の指示 |
+| [CLAUDE.md](CLAUDE.md)、[.claude/rules/](.claude/rules/) | AIへの常設の指示(どの作業にも要るもの)と、置き場所ごとの指示(サーバー、クライアント、通信の形式と生成、文書) |
 
 ## 開発者の端末に要るもの
 
