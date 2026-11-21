@@ -1,0 +1,9 @@
+# oapi-codegen の設定(ADR-003)。make generate が使う。
+package: openapi
+output: internal/openapi/openapi.gen.go
+generate:
+  std-http-server: true
+  models: true
+output-options:
+  # どの操作からも参照されないスキーマ(WebSocket のイベント)を残す。
+  skip-prune: true

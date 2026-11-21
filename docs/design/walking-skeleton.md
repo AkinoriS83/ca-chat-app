@@ -49,6 +49,11 @@
 | DD-25 | 規則を持つ domain の値(`Body`、`SendID`)を、保管した値から組み立てるために、検証しない復元用の関数(`RestoreBody`、`RestoreSendID`)を、domain に置く。呼ぶのは、ポートを実装する adapter と、テスト用のポートの実装だけとする | 保管先の adapter は、履歴の行から `domain.Message` を組み立てる。`NewBody` と `ParseSendID` は、domain の規則であり、adapter からは呼ばない(ADR-005)。保管した値は、保管の時点で、検証を通っている。規則を変えた後も、変える前に保管した値を読める |
 | DD-26 | クライアントに、利用者の選択に戻る操作(`leaveUser`)を置く。開いている会話と同じ相手を、もう一度指定された場合は、会話の状態を作り直さない。履歴を取得できなかったときだけ、取得し直す | 利用者の選択は、利用者を選んでいないときに示す(5.4)。戻るには、接続を閉じ、利用者を空にする操作が要る(WS-41)。同じ相手の指定で作り直すと、入力中の本文と、送信できなかったメッセージが失われる(WS-17)。履歴の取得のやり直しは、この指定で行う |
 | DD-27 | サーバーは、`LISTEN_ADDR` が、ループバックのアドレス(127.0.0.0/8、::1)でない場合、起動に失敗する(仮実装 WS-P2) | 仮のログインは、なりすましを防がない。ローカルの開発環境の外から、到達できてはならない(WS-D6、ADR-007)。設定の誤りを、起動の時点で止める。フェーズ1の認証で、仮のログインとともに取り除く |
+| DD-28 | テストごとのデータベースを用意する処理を、`adapter/postgres/pgtest` に置く。`postgres` のテストと、`cmd/server` のテストが使う。import してよい先は、pgx だけとする(2026-11-21、実装の中で追加) | 同じ処理が、2つのパッケージのテストに要る。テストの補助を置く場所が、パッケージの一覧になかった。保管先の adapter の下に置けば、pgx を import する範囲が広がらない(OBS-008) |
+| DD-29 | `domain` と `application` が import してよい標準ライブラリは、入出力を行わないものを、depguard の設定に列挙する。規則のないパッケージ(`internal` の下で、どの規則にも当たらないファイル)は、すべての import を違反とする(2026-11-21、実装の中で追加) | depguard の strict では、標準ライブラリを一括で許可すると、`net` などの、前方一致の禁止が効かない(許可と禁止の両方に当たる場合、長い方が勝つ)。規則のないパッケージを違反にすれば、「パッケージを加えるときは、規則を加える」(ADR-005)を、検査が強いる(OBS-007) |
+| DD-30 | E2Eテストでは、サーバーと、クライアントの開発用のサーバーの起動を、待ち受け先への接続ではなく、プロセスの出力で確かめる。トレースは、既定では記録しない。テストの時間の上限は、120秒とする(2026-11-21、実装の中で追加) | 開発者の端末(WSL2 の mirrored ネットワーク)では、待ち受けのない 127.0.0.1 のポートへの接続が、拒否されずに、約2分待たされることがあった。Playwright は、起動の前に、待ち受け先が空いていることを、接続して確かめる。トレースの記録は、メモリを使い、WSL2 のメモリ(2GB)では、テストが時間切れになった。同じ日に、開発者が、メモリを 4GB にした。4GB では、トレースを記録しても、時間切れにならない(約5秒)。既定は、変えていない。さらに、開発者が、WSL2 のネットワークを nat に変え、待ち受けのないポートへの接続は、すぐに拒否されるようになった。起動の確認の方法は、変えていない |
+| DD-31 | JSON の応答(拒否とエラーの応答を含む)に、`Cache-Control: no-store` を付ける(2026-11-21、実装の中で追加) | 応答は、利用者ごとの内容である。ブラウザと中継に、保存させない |
+| DD-32 | E2Eテストは、`E2E_CHROMIUM_PATH` を与えた場合、Playwright が取得した Chromium の代わりに、端末に導入済みの Chromium を使う。与えない場合は、これまで通りとする。テストは、開いたブラウザのコンテキストを、テストの終わりに閉じる(2026-11-21、実装の中で追加) | Playwright の Chromium が要する OS のライブラリは、管理者の権限がないと導入できない。開発者は、snap で Chromium を導入した。この場合、ブラウザの版は、リポジトリでは固定されない(WS-32 の対象は、既定の構成とする)。コンテキストを閉じないと、前のテストの画面が、接続を保ったまま残り、終了のときに、中継のエラーが出力された |
 
 DD-13 の帰結として、仕様の拒否の表にある「利用者(送信者)が参加者でない会話を指定した」は、本スライスの操作では、表せません。該当する要求の形がないためです。参加者でない利用者に対する保護(WS-23、WS-24)は、「どの操作によっても取得・送信できない」ことで確かめます(7.3)。「見つからない」応答は1種類だけであり、WS-15、WS-38 の「同じ応答」は、これで成り立ちます。
 
@@ -69,8 +74,10 @@ server/                          Go のモジュール
   internal/adapter/postgres/     保管先(ポートを実装する)
     queries/                     sqlc に与える SQL
     sqlcgen/                     sqlc が生成したコード
+    pgtest/                      保管先を使うテストのための、データベースの用意(DD-28)
   internal/adapter/fixeduser/    固定ユーザー(ポートを実装する。仮実装)
   internal/openapi/              oapi-codegen が生成したコード
+  internal/depchecksample/       規則のないパッケージの、違反の見本だけを置く(DD-29)
   migrations/                    goose のマイグレーション
   .golangci.yml  .golangci.deps.yml  sqlc.yaml  oapi-codegen.yaml
 client/                          npm のパッケージ
@@ -88,7 +95,7 @@ scripts/                         Makefile から呼ぶ手順
 compose.yaml  Makefile  .env.example  .gitignore  README.md  CLAUDE.md
 ```
 
-Go のモジュールのパスは、公開先のリポジトリのパスに合わせます。リモートが未設定のため、実装の着手時に、開発者に確認します(10.2)。本書では、`<module>` と書きます。
+Go のモジュールのパスは、`github.com/AkinoriS83/ca-chat-app/server` です(2026-11-21 に、開発者に確認した)。本書では、`<module>` と書きます。
 
 ### プロセスと待ち受け先
 
@@ -206,13 +213,15 @@ ADR-005 の規則を、パッケージに当てはめたものです。depguard 
 | `adapter/httpapi` | `application/usecase`、`openapi` |
 | `adapter/wsaccept` | `application/usecase`、`openapi`、coder/websocket |
 | `adapter/wsdelivery` | `application/port`、`domain`、`openapi` |
-| `adapter/postgres` | `application/port`、`domain`、`adapter/postgres/sqlcgen`、pgx |
+| `adapter/postgres` | `application/port`、`domain`、`adapter/postgres/sqlcgen`、`adapter/postgres/pgtest`(テストだけが使う)、pgx |
 | `adapter/postgres/sqlcgen` | pgx |
+| `adapter/postgres/pgtest` | pgx(DD-28) |
 | `adapter/fixeduser` | `application/port`、`domain` |
 | `openapi` | oapi-codegen/runtime |
 | `cmd/server` | すべて |
 
-- `domain` と `application` は、入出力を行う標準ライブラリのパッケージ(`net/http`、`database/sql`、`os`、`log/slog` など)を、import しない。これも、depguard の規則に含める。
+- `domain` と `application` は、入出力を行う標準ライブラリのパッケージ(`net/http`、`database/sql`、`os`、`log/slog`、`fmt` など)を、import しない。depguard の設定には、この3つのパッケージが import してよい標準ライブラリ(入出力を行わないもの)を、列挙する(DD-29)。ほかのパッケージは、標準ライブラリのすべてを、import してよい。
+- 上の表のどれにも当たらない、`internal` の下のパッケージは、すべての import を、違反とする(DD-29)。
 - ログは、adapter と main が出力する。`domain` と `application` は、ログを出力しない。
 - 規則は、テストのファイル(`_test.go`)にも、同じく適用する(DD-23)。
 - depguard の設定は、`server/.golangci.deps.yml` に置き、`make check-deps` と `make check-deps-selftest` だけが使う。`make lint` が使う `server/.golangci.yml` では、depguard を有効にしない(DD-24)。
@@ -403,7 +412,8 @@ type RejectedError struct{ Kind Rejection } // error を実装する
 
 - `httpapi` は、Origin を検証するミドルウェアを公開する。Origin ヘッダーがあり、設定で与えたアプリのオリジンと一致しない要求に、`forbidden_origin`(403)を返す。Origin がない要求は、通す(ADR-002)。
 - main は、このミドルウェアで、HTTP の操作と、WebSocket の接続先の両方を包む。
-- CORS のヘッダーは、どの応答にも付けない。`OPTIONS` は、定義されていない方法として、`not_found` を返す。
+- CORS のヘッダーは、どの応答にも付けない。`OPTIONS` は、定義されていない方法として、`not_found` を返す(Origin が、アプリのオリジンと一致しない場合は、3.4 の順により、`forbidden_origin` が先になる)。
+- JSON の応答には、`Cache-Control: no-store` を付ける(DD-31)。
 - 定義されていないパスと方法には、`not_found` を返す。Go の既定の応答(文言)を、使わない。そのために、`httpapi` は、次の2つを公開し、main が組み込む。
   - すべてのパスを受ける受け皿。ServeMux に、`/` として登録する。受け皿があると、パスは定義されているが方法が違う要求も、ServeMux の 405 ではなく、受け皿に届く(2026-11-21 に確かめた)。
   - パスが正規の形でない要求(空の要素、`.`、`..` を含む。`path.Clean` の結果と一致しない)に、`not_found` を返すミドルウェア。ServeMux より前に置く。ServeMux は、これらの要求に、307 と HTML の本文を返すためである(`//` を含むパスについて、2026-11-21 に確かめた)。
@@ -708,9 +718,9 @@ PostgreSQL のクライアント(`psql`)は、端末に導入しません。保�
 
 - サーバーは、見本を、対象のパッケージの中に、ビルドタグ(`depcheck_sample`)を付けたファイルとして置く。1つのファイルには、違反する import を、1つだけ書く。通常のビルドと検査には、含まれない。
 - `check-deps-selftest` は、このタグを付けて depguard を実行し、出力に、見本のファイルごとの、depguard の違反があることを確かめる。1つでも欠けていれば、失敗とする。出力に、型検査の失敗(typecheck)がある場合も、失敗とする。
-- 見本は、少なくとも次を含める。`httpapi` → `application/port`、`httpapi` → `domain`、`httpapi` → `adapter/postgres`、`wsaccept` → `application/port`、`wsdelivery` → `application/usecase`、`application/usecase` → `adapter/postgres`、`domain` → `openapi`、`domain` → `net/http`。
+- 見本は、少なくとも次を含める。`httpapi` → `application/port`、`httpapi` → `domain`、`httpapi` → `adapter/postgres`、`wsaccept` → `application/port`、`wsdelivery` → `application/usecase`、`application/usecase` → `adapter/postgres`、`domain` → `openapi`、`domain` → `net/http`。実装では、これに、`wsaccept` → `adapter/wsdelivery`、`wsdelivery` → coder/websocket、`application/usecase` → `log/slog`、規則のないパッケージ(`internal/depchecksample`)からの import を加えた(計12件)。
 - import が循環する見本(`domain` → `application/port`、`application/usecase` → `adapter/httpapi` など)は、置かない。循環は、コンパイラが拒否する(ADR-001)。循環する見本があると、検査は、型検査の失敗を1件報告するだけになり、他の見本の違反も、報告しなくなる(golangci-lint 2.13.2 で、2026-11-21 に確かめた)。
-- クライアントは、見本を、各層の `__depcheck__/` に置く。通常の検査とビルドからは、除く。見本は、`ui` → `adapter`、`adapter` → `ui`、`ui` → `application/port`、`application` → `adapter`、`adapter` → `application/chatApp.ts`、`application` → `react`、`application` での `fetch` の使用を含める。
+- クライアントは、見本を、各層の `__depcheck__/` に置く。通常の検査とビルドからは、除く。ファイルの名前の `.depcruise.ts` は、dependency-cruiser が、`.eslint.ts` は、ESLint が、検出することを表す。見本は、`ui` → `adapter`、`adapter` → `ui`、`ui` → `application/port`、`application` → `adapter`、`adapter` → `application/chatApp.ts`、`application` → `react`、`application` での `fetch` の使用を含める。
 
 ### 6.5 AIへの常設の指示(`CLAUDE.md`。DD-09)
 
@@ -755,6 +765,7 @@ PostgreSQL のクライアント(`psql`)は、端末に導入しません。保�
 
 - `make test-server` は、雛形のデータベース(`chat_test_template`)を作り直し、goose でマイグレーションを適用する。作り直し(`DROP DATABASE` と `CREATE DATABASE`)は、保管先のコンテナの中の `psql` を、`docker compose exec` で実行する。goose と、テストは、端末から、127.0.0.1 に公開したポートへ接続する。
 - 保管先を使うテストは、テストごとに、雛形を複製したデータベースを作る(`CREATE DATABASE … TEMPLATE chat_test_template`)。終わったら、削除する。
+- 複製と削除の処理は、`adapter/postgres/pgtest` に置き、`postgres` のテストと、`cmd/server` のテストが使う(DD-28)。
 - 雛形がない場合、テストは、`make test-server` を使うよう示して、失敗する。
 - `go test` には、`-count=1` を付ける。マイグレーションのファイルは、Go のテストの入力として追跡されない。付けないと、マイグレーションを変えても、キャッシュされた結果が返る。
 - `go test` には、`-race` も付ける。並行の送信(WS-07、WS-18)と、配信の状態の排他(4.5.3)を、確かめるためである。
@@ -838,7 +849,9 @@ domain の本文のテストは、少なくとも次の値を含めます。
 - 1つのテストの中で、互いに状態を共有しない、複数のブラウザのコンテキストを開く。
 - `make e2e` は、E2E用のデータベース(`chat_e2e`)を作り直して、マイグレーションを適用する(手段は、7.1 の雛形と同じ)。Playwright が、このデータベースにつないだサーバー(127.0.0.1:18080)と、クライアントの開発用のサーバー(127.0.0.1:15173)を起動する。`APP_ORIGIN` は、`http://localhost:15173` とする。
 - テストは、直列に実行する。テストごとに、始める前に、`messages` と `conversations` を TRUNCATE する(DD-07)。保管先のコンテナの中の `psql` を、`docker compose exec` で実行する。サーバーは、メッセージと会話を、メモリに保持しないため、再起動は要らない。
-- クライアントの開発用のサーバーの、待ち受け先と中継先は、環境変数で変えられるようにする。
+- クライアントの開発用のサーバーの、待ち受け先と中継先は、環境変数(`CLIENT_PORT`、`API_TARGET`)で変えられるようにする。
+- 起動の確認は、プロセスの出力で行う。トレースは、既定では記録しない(DD-30)。
+- Chromium が要する OS のライブラリ(libnss3 など)は、`make setup` では導入しない(管理者の権限が要る)。手順書に、導入の手順を記載する。導入しない場合は、端末に導入済みの Chromium を、`E2E_CHROMIUM_PATH` で指定できる(DD-32)。
 
 ## 8. 動作検証の具体化(DD-03)
 
@@ -903,6 +916,6 @@ domain の本文のテストは、少なくとも次の値を含めます。
 
 | 事項 | 決める時点 |
 |---|---|
-| Go のモジュールのパス(公開先のリポジトリのパス) | 手順1の前に、開発者に確認する |
-| 道具と依存物の版(6.3) | 手順1で、導入の時点の最新の安定版を確かめて決める。TypeScript は 5.x 系(DD-21) |
-| WSL2 で、Windows の側のブラウザから `localhost` で到達できるか | 手順0 |
+| Go のモジュールのパス(公開先のリポジトリのパス) | 決定済み(2026-11-21)。`github.com/AkinoriS83/ca-chat-app/server` |
+| 道具と依存物の版(6.3) | 決定済み(2026-11-21)。Makefile、`server/go.mod`、`client/package.json` に記録した。ライセンスは、手順書に記載した |
+| WSL2 で、Windows の側のブラウザから `localhost` で到達できるか | 確認済み(2026-11-21)。Windows の側の Edge から、`http://localhost:5173` で、HTTP と WebSocket の両方が、中継を通って届いた。保護された文脈としても扱われた。ADR-007 は、改めない。この確認は、ネットワークが mirrored のときのものである。同じ日に、nat に変えた後も、Windows の側から、`localhost` で、HTTP と WebSocket の両方が届くことを確かめた |

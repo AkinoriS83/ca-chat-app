@@ -1,0 +1,38 @@
+# ローカルの開発環境の保管先(ADR-004、ADR-007)。
+# 秘密は、同じ場所の .env で与える。与えられていなければ、起動に失敗する。
+name: ca-chat-app
+
+services:
+  postgres:
+    image: postgres:18.7
+    environment:
+      POSTGRES_USER: ${PGUSER:?PGUSER を .env で与えてください}
+      POSTGRES_PASSWORD: ${PGPASSWORD:?PGPASSWORD を .env で与えてください}
+      POSTGRES_DB: ${PGDATABASE:?PGDATABASE を .env で与えてください}
+    # ログに、メッセージの本文を記録しない構成(ADR-004)。
+    command:
+      - postgres
+      - -c
+      - log_error_verbosity=terse
+      - -c
+      - log_statement=none
+      - -c
+      - log_min_duration_statement=-1
+      - -c
+      - log_parameter_max_length_on_error=0
+    ports:
+      # 端末自身からの接続だけを受け付ける(ADR-007)。
+      - "127.0.0.1:${PGPORT:?PGPORT を .env で与えてください}:5432"
+    volumes:
+      # 18 のイメージは、データを /var/lib/postgresql の下に置く。
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      # TCP での接続を確かめる。初回の起動では、初期化のために、
+      # TCP で待ち受けないサーバーが一時的に動くためである。
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  postgres-data:

@@ -1,0 +1,16 @@
+# sqlc の設定(ADR-004)。make generate が使う。
+version: "2"
+sql:
+  - engine: postgresql
+    schema: migrations
+    queries: internal/adapter/postgres/queries
+    gen:
+      go:
+        package: sqlcgen
+        out: internal/adapter/postgres/sqlcgen
+        sql_package: pgx/v5
+        overrides:
+          - db_type: timestamptz
+            go_type:
+              import: time
+              type: Time

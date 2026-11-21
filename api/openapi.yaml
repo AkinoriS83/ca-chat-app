@@ -1,0 +1,224 @@
+openapi: 3.0.3
+info:
+  title: ca-chat-app 通信の形式
+  version: 0.1.0
+  description: |
+    サーバーとクライアントの間の、通信の形式の定義です(ADR-003)。
+    サーバーの型(oapi-codegen)と、クライアントの型(openapi-typescript)は、この文書から生成します。
+
+    ## 利用者の添え方
+
+    仮実装(WS-P2): 仮のログイン。HTTP の操作には、固定ユーザーの識別名を、要求ヘッダー `X-Fixed-User` で添えます。
+    添えられていない要求と、固定ユーザーでない識別名を添えた要求は、`unauthenticated`(401)で拒否します。
+
+    ## Origin の検証
+
+    Origin ヘッダーがあり、アプリのオリジンと一致しない要求は、`forbidden_origin`(403)で拒否します。
+    他のオリジンに対して、CORS の許可は返しません。
+
+    ## リアルタイムの接続(WebSocket)
+
+    WebSocket は、OpenAPI の操作としては記述できないため、ここに記述します。
+
+    - 接続先は、`GET /api/realtime?user=<識別名>` です。仮実装(WS-P2): 利用者は、クエリ `user` で添えます。
+    - 接続を確立する前の拒否(`forbidden_origin`、`unauthenticated`、`invalid_input`)は、
+      HTTP の応答として、`ErrorResponse` を返します。
+    - サーバーは、接続を確立し、その接続を配信の宛先として登録した後、最初に `ReadyEvent` を1通届けます。
+      クライアントは、これを受けた後に、履歴を取得します(ADR-010)。
+    - 以後、サーバーは、接続した利用者が参加する会話のメッセージが保管されるたびに、`MessageEvent` を届けます。
+      送信に使われた端末にも届けます(ADR-011)。
+    - どちらも、テキストのメッセージ(JSON)です。形式は、`ServerEvent` です。
+    - 端末からは、何も送りません。データのメッセージを受けた場合、サーバーは、接続を閉じます。
+
+    ## 拒否とエラーの応答
+
+    拒否とエラーの応答は、どの操作でも、`ErrorResponse`(`code` だけ)です。
+    1つの要求が複数の場合に当たるときは、次の順で、最初に当たったものを返します。
+    Origin、形式、利用者、本文、送信の識別子の形式、自分自身、相手が居ない、別の会話との一致。
+
+servers:
+  - url: /
+
+security:
+  - fixedUser: []
+
+paths:
+  /api/direct-conversations/{peer}/messages:
+    parameters:
+      - name: peer
+        in: path
+        required: true
+        description: 相手の識別名
+        schema:
+          type: string
+    get:
+      operationId: listDirectMessages
+      summary: 会話の履歴を読む
+      description: |
+        相手との1on1会話の、すべてのメッセージを、連番の順に返します。
+        仮実装(WS-P4): 分割せずに、一度に返します。
+        成立していない会話は、空の一覧を返します。会話は、成立させません。
+      responses:
+        "200":
+          description: 会話のメッセージ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: sendDirectMessage
+      summary: メッセージを送る
+      description: |
+        相手との1on1会話に、メッセージを送ります。成立していない会話は、併せて成立させます。
+        保管済みのメッセージと、送信者と送信の識別子がともに一致する送信には、
+        新しいメッセージを保管せず、保管済みのメッセージを返します。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageRequest"
+      responses:
+        "200":
+          description: 保管したメッセージ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendMessageResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
+components:
+  securitySchemes:
+    # 仮実装(WS-P2): 仮のログイン。フェーズ1の認証で置き換える。
+    fixedUser:
+      type: apiKey
+      in: header
+      name: X-Fixed-User
+      description: 固定ユーザーの識別名
+
+  responses:
+    Error:
+      description: 拒否、または、エラー
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    UserProfile:
+      type: object
+      required: [handle, displayName]
+      properties:
+        handle:
+          type: string
+          description: 識別名
+        displayName:
+          type: string
+          description: 表示名
+
+    Message:
+      type: object
+      required: [participants, seq, sender, body, sentAt]
+      properties:
+        participants:
+          type: array
+          description: 会話の参加者2人の識別名。昇順
+          items:
+            type: string
+        seq:
+          type: integer
+          format: int64
+          description: 会話ごとの連番。メッセージの順序
+        sender:
+          $ref: "#/components/schemas/UserProfile"
+        body:
+          type: string
+          description: 本文
+        sentAt:
+          type: string
+          format: date-time
+          description: 送信の日時(保管した日時。UTC)
+
+    MessageList:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          description: 連番の順
+          items:
+            $ref: "#/components/schemas/Message"
+
+    SendMessageRequest:
+      type: object
+      required: [sendId, body]
+      properties:
+        sendId:
+          type: string
+          description: 送信の識別子。値の検証は、サーバーの内側の層が行う
+        body:
+          type: string
+          description: 本文。値の検証は、サーバーの内側の層が行う
+
+    SendMessageResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          $ref: "#/components/schemas/Message"
+
+    ErrorCode:
+      type: string
+      description: 拒否とエラーの種類
+      enum:
+        - forbidden_origin
+        - invalid_input
+        - unauthenticated
+        - invalid_body
+        - invalid_peer
+        - not_found
+        - internal
+
+    ErrorResponse:
+      type: object
+      required: [code]
+      properties:
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+
+    ReadyEvent:
+      type: object
+      description: 受信を開始できたことの知らせ
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [ready]
+
+    MessageEvent:
+      type: object
+      description: メッセージの配信
+      required: [type, message, sendId]
+      properties:
+        type:
+          type: string
+          enum: [message]
+        message:
+          $ref: "#/components/schemas/Message"
+        sendId:
+          type: string
+          description: 送信の識別子(ADR-011)
+
+    ServerEvent:
+      description: サーバーが、WebSocket で端末に届けるメッセージ
+      oneOf:
+        - $ref: "#/components/schemas/ReadyEvent"
+        - $ref: "#/components/schemas/MessageEvent"
+      discriminator:
+        propertyName: type
+        mapping:
+          ready: "#/components/schemas/ReadyEvent"
+          message: "#/components/schemas/MessageEvent"

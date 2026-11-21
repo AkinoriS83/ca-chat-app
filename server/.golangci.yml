@@ -1,0 +1,21 @@
+# make lint が使う、golangci-lint の設定。
+#
+# 依存規則と飛ばし禁止の規則(depguard)は、ここでは有効にしない。
+# make check-deps と make check-deps-selftest だけが、.golangci.deps.yml で実行する。
+# make lint が違反を検出すると、検査の記録(docs/dependency-check-log.md)に残らないまま、
+# 直されてしまうためである(ADR-008「取り漏らしを防ぐ手段」)。
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - errorlint
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/AkinoriS83/ca-chat-app/server

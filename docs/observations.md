@@ -82,6 +82,97 @@
 | 所見 | ポートの境界で、domain の型をそのまま使うため、adapter が、domain の値を作る必要がある。「作る」と「規則を確かめる」を分ける関数が、domain に2つ増えた。呼んでよい箇所は、import の検査では区別できず、規約が1つ増えた。一方、規則を変えた後も、変える前に保管した値を読める形になった。実装の前であり、構造がなかった場合との差は、推測である |
 | 気付いた者 | AI |
 
+### OBS-007
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-21 |
+| スライスと工程 | ウォーキングスケルトン、実装 |
+| 区分 | どちらとも言えない |
+| 出来事 | depguard に、domain と application が「入出力を行う標準ライブラリを import しない」規則を書こうとした。列挙にない import を違反とする設定(strict)では、標準ライブラリを一括で許可すると、個別の禁止(`net` など、前方一致の指定)が効かなかった。許可と禁止の両方に当たる場合、長い方の指定が勝つためである。domain と application は、使ってよい標準ライブラリを、1つずつ列挙する形にした。併せて、規則のないパッケージの import を、すべて違反とする規則を加えた |
+| 関わる構造 | domain、application。依存規則(検査の手段) |
+| 手がかり | `server/.golangci.deps.yml` の `domain`、`application-port`、`application-usecase`、`unlisted-package`。規則に違反する見本 `server/internal/domain/depcheck_sample_nethttp.go`、`server/internal/depchecksample/` |
+| 所見 | 規則は、道具の仕様に合わせて、禁止の列挙から、許可の列挙に変わった。内側の層で、新しい標準ライブラリ(`fmt` など)を使うたびに、設定の変更が要る。一方で、「列挙にない import は違反」という、他のパッケージの規則と、形が揃った。`fmt`(標準出力への出力を含む)を、内側の層から除けた。設定の誤りに気付けたのは、規則に違反する見本(`domain` → `net/http`)を先に置いていたためである。構造がなかった場合との差は、推測である |
+| 気付いた者 | AI |
+
+### OBS-008
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-21 |
+| スライスと工程 | ウォーキングスケルトン、実装 |
+| 区分 | どちらとも言えない |
+| 出来事 | テストごとのデータベースを、雛形から複製して用意する処理が、`adapter/postgres` のテストと、`cmd/server` のテストの、両方に要った。テストの補助を置く場所は、パッケージの一覧になかった。同じ処理を2箇所に書く案と、パッケージを加える案があり、`adapter/postgres/pgtest` を加えて、規則を加えた |
+| 関わる構造 | adapter の層(保管先)、main。依存規則(パッケージごとの、import してよい先の列挙) |
+| 手がかり | `server/internal/adapter/postgres/pgtest/pgtest.go`。`server/.golangci.deps.yml` の `adapter-postgres-pgtest` と、`adapter-postgres` の許可の一覧。詳細設計の DD-28 |
+| 所見 | パッケージを1つ加えるために、検査の設定の3箇所(そのパッケージの規則、import する側の許可、「規則のないパッケージ」からの除外)と、アーキテクチャ概要を変えた。規則がなければ、置き場所に迷わなかったと思われるが、推測である。置き場所は、「保管先の adapter の下で、pgx だけを import する」と、規則から決められた |
+| 気付いた者 | AI |
+
+### OBS-009
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-21 |
+| スライスと工程 | ウォーキングスケルトン、実装 |
+| 区分 | 妨げ |
+| 出来事 | 拒否の応答(`{"code": …}`)を書く処理が、`httpapi`(HTTP の操作)と、`wsaccept`(接続を確立する前の拒否)の両方に要った。adapter のパッケージ同士は、import できない。`httpapi` の関数を使う近道は取らず、同じ処理(約15行)を、`wsaccept` にも書いた。メッセージを通信の形式に変換する処理も、ADR-005 が見込んだ通り、`httpapi` と `wsdelivery` の2箇所になった。メッセージの詰め替えは、`usecase` の中のものを含めて、3つの関数になった |
+| 関わる構造 | adapter の層。依存規則(adapter 同士は、import しない)。型参照の範囲(ユースケースを呼ぶ境界の、専用のデータ構造) |
+| 手がかり | `server/internal/adapter/httpapi/respond.go` の `writeError`、`server/internal/adapter/wsaccept/handler.go` の `writeError`。`usecase/view.go` の `toMessageView`、`httpapi/handler.go` の `toMessage`、`wsdelivery/hub.go` の `toMessage`。食い違いを検出するテストは、`server/cmd/server/send_and_history_test.go` の `TestDelivery_ReachesAllDevicesOfParticipants` |
+| 所見 | 携行コストの実測である。メッセージに項目を1つ加える場合、変える箇所は、通信の形式の定義、domain の型、保管先の問い合わせと詰め替え、`MessageView` と `toMessageView`、`httpapi` の `toMessage`、`wsdelivery` の `toMessage`、クライアントの `wire.ts` と `model.ts` になる見込みである(生成したコードを除く)。2つの変換の食い違いは、テスト1つで検出できる形にできた。構造がなければ、変換は1箇所で済んだと思われるが、推測である |
+| 気付いた者 | AI |
+
+### OBS-010
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-21 |
+| スライスと工程 | ウォーキングスケルトン、実装(テスト) |
+| 区分 | 助け |
+| 出来事 | 層の境界で、実装を差し替えてテストした。(1) usecase のテストは、手で書いたテスト用のポートで、保管先を使わずに、拒否の順と、重複した送信の分岐を確かめた。(2) 保管の失敗(WS-31)と、ログ(WS-33)のテストは、main の組み立ての関数に、確定の直前に失敗する `Transactor` を渡して、実際の保管先の上で起こした。(3) クライアントの application のテストは、5つのポートを差し替え、ブラウザのAPIのない環境で、時間をテストから進めて、送信の状態の遷移を確かめた。ui のテストも、同じテスト用のポートを使った |
+| 関わる構造 | ポートの境界(usecase → port ← adapter)。main の組み立て。クライアントの application と、そのポート |
+| 手がかり | `server/internal/application/usecase/fakes_test.go`。`server/cmd/server/errors_test.go` の `failBeforeCommit`、`server/cmd/server/assemble.go` の `newHandler`。`client/src/application/testPorts.ts`、`client/src/application/chatApp.test.ts`、`client/src/ui/App.test.tsx` |
+| 所見 | OBS-004 の見込み(組み立てを関数にしたことで、実装を差し替えられる)は、成り立った。確定の直前の失敗は、ポートが「一体として行う操作を、関数として受ける」形(ADR-012)であるため、包む実装を約10行で書けた。クライアントでは、10秒の時間切れと、応答と配信の届く順を、待たずに確かめられた。構造がなければ、同じ確認に、通信や時間の模擬が要ったと思われるが、推測である |
+| 気付いた者 | AI |
+
+### OBS-011
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-21 |
+| スライスと工程 | ウォーキングスケルトン、実装(テスト) |
+| 区分 | どちらとも言えない |
+| 出来事 | OBS-005 で決めた通り、`httpapi` と `wsaccept` のパッケージの中のテストは、本文の復号、Origin とパスのミドルウェア、共通の応答、書き込み口に限った。拒否の種類と `code` の対応、要求の処理の順、接続の受け付けの手順は、`cmd/server` のテスト(実際の保管先を使う)でだけ確かめた。`cmd/server` のテストは、約35件で、実行は、競合の検出を有効にして、6〜9秒だった |
+| 関わる構造 | adapter の層(ユースケースを呼ぶもの)。依存規則。型参照の範囲(ユースケースを呼ぶ側に、インターフェイスを置かない) |
+| 手がかり | `server/internal/adapter/httpapi/*_test.go`、`server/internal/adapter/wsaccept/*_test.go`、`server/cmd/server/*_test.go` |
+| 所見 | OBS-005 が「まだ分からない」とした、テストの書きにくさと実行の時間は、本スライスの規模では、妨げにならなかった。`httpapi` の、拒否の種類から `code` への対応のような、保管先に関わらない確認にも、保管先の起動が要る。テストが main のパッケージに集まり、失敗したときに、どの層の誤りかは、テストの名前からは分からない。規則の例外は、設けていない |
+| 気付いた者 | AI |
+
+### OBS-012
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-21 |
+| スライスと工程 | ウォーキングスケルトン、実装 |
+| 区分 | どちらとも言えない |
+| 出来事 | クライアントでは、ポートの境界に、専用のデータ構造を置かずに済んだ。adapter は、application の型(`model.ts`)を、型だけの import で参照し、検査は、型だけの import を、種類として区別した(`model.ts` への import は、型だけを許し、`chatApp.ts` への import は、型だけでも違反とする)。サーバーでは、同じ区別ができず、ユースケースを呼ぶ境界に、専用の入力・出力のデータ構造を置いている(OBS-001) |
+| 関わる構造 | クライアントの adapter と application。型参照の範囲。依存規則(検査の手段) |
+| 手がかり | `client/.dependency-cruiser.cjs` の `adapter-not-to-application-behavior`、`adapter-imports-model-as-type-only`。規則に違反する見本 `client/src/adapter/__depcheck__/toChatApp.depcruise.ts`。`client/tsconfig.json` の `verbatimModuleSyntax` |
+| 所見 | OBS-001 の所見(制約は、構造そのものではなく、言語の選定との組み合わせによる)を、実装で確かめた形である。クライアントの境界は、詰め替えが、通信の形式から application の型への1回だけになった。ただし、クライアントには domain の層がなく、守る対象が、サーバーより少ない。同じ条件の比較ではない |
+| 気付いた者 | AI |
+
+### OBS-013
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-21 |
+| スライスと工程 | ウォーキングスケルトン、実装 |
+| 区分 | どちらとも言えない |
+| 出来事 | 実装は、AIが、詳細設計とADRの全体を読んだうえで、内側の層から順に(domain、usecase、adapter、main、クライアントの application、adapter、ui)、1つの作業の中で行った。層ごとに、テストを通してから、次の層に進んだ。AIに読ませる範囲を、層の単位で絞ることは、試していない。依存規則と飛ばし禁止の検査(`make check-deps`)が検出した違反は、0件だった。近道を取りたくなった箇所は、OBS-009 の1件で、検査を実行する前に、規則に従って書いた |
+| 関わる構造 | すべての層。依存規則と飛ばし禁止 |
+| 手がかり | `docs/dependency-check-log.md`(記録は、空である)。規則に違反する見本の検査(`make check-deps-selftest`)は、サーバー12件、クライアント9件を、すべて検出している |
+| 所見 | 違反が0件であることは、検査が近道を防いだことを、示さない。AIは、規則を、詳細設計と設定から先に読んでおり、違反する形を、最初から書かなかった。層の単位で範囲を絞れるかどうかは、この作業からは、分からない。後続のスライスで、1つの層だけを読ませる作業を試したときに、記録する |
+| 気付いた者 | AI |
+
 ## スライスの記録
 
 まだ、ありません。

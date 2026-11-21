@@ -1,0 +1,17 @@
+# 秘密(ローカルの開発環境の設定)。見本は .env.example
+.env
+
+# Makefile が導入する Go の道具(DD-19)
+/bin/
+
+# npm の依存物
+node_modules/
+
+# ビルドとテストの出力
+/client/dist/
+/client/coverage/
+/client/test-results/
+/client/playwright-report/
+/client/blob-report/
+*.tsbuildinfo
+/server/coverage.out

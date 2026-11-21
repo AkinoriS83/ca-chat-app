@@ -1,0 +1,195 @@
+# 依存規則と飛ばし禁止の検査(ADR-005)の設定。
+#
+# make check-deps と make check-deps-selftest だけが使う。直接には、実行しない。
+# 検査の記録(docs/dependency-check-log.md)に、残らないためである。
+#
+# パッケージごとに、import してよい先を列挙する(list-mode: strict)。列挙にない import は、違反である。
+# 規則は、テストのファイル(_test.go)と、生成したコードにも、同じく適用する。
+# 末尾の $ は、完全一致を表す($ がなければ、前方一致)。
+# パッケージを加えるときは、規則を加え、アーキテクチャ概要(docs/architecture.md)を更新する。
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - depguard
+  exclusions:
+    # 生成したコードも、検査する。
+    generated: disable
+  settings:
+    depguard:
+      rules:
+        # domain: 外部のライブラリと、入出力を行う標準ライブラリを、import しない。
+        # 標準ライブラリも、入出力を行わないものだけを、列挙する。
+        domain:
+          list-mode: strict
+          files:
+            - "**/internal/domain/*.go"
+          allow:
+            - cmp$
+            - context$
+            - errors$
+            - maps$
+            - math$
+            - reflect$
+            - slices$
+            - sort$
+            - strconv$
+            - strings$
+            - sync$
+            - testing$
+            - time$
+            - unicode$
+            - unicode/utf16$
+            - unicode/utf8$
+
+        application-port:
+          list-mode: strict
+          files:
+            - "**/internal/application/port/*.go"
+          allow:
+            - cmp$
+            - context$
+            - errors$
+            - maps$
+            - math$
+            - reflect$
+            - slices$
+            - sort$
+            - strconv$
+            - strings$
+            - sync$
+            - testing$
+            - time$
+            - unicode$
+            - unicode/utf16$
+            - unicode/utf8$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/domain$
+
+        application-usecase:
+          list-mode: strict
+          files:
+            - "**/internal/application/usecase/*.go"
+          allow:
+            - cmp$
+            - context$
+            - errors$
+            - maps$
+            - math$
+            - reflect$
+            - slices$
+            - sort$
+            - strconv$
+            - strings$
+            - sync$
+            - testing$
+            - time$
+            - unicode$
+            - unicode/utf16$
+            - unicode/utf8$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/application/port$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/domain$
+
+        # ユースケースを呼ぶ adapter: port、domain、他の adapter を、import しない。
+        adapter-httpapi:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/httpapi/*.go"
+          allow:
+            - $gostd
+            - github.com/AkinoriS83/ca-chat-app/server/internal/application/usecase$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/openapi$
+
+        adapter-wsaccept:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/wsaccept/*.go"
+          allow:
+            - $gostd
+            - github.com/AkinoriS83/ca-chat-app/server/internal/application/usecase$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/openapi$
+            - github.com/coder/websocket$
+
+        # ポートを実装する adapter: usecase と、他の adapter を、import しない。
+        adapter-wsdelivery:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/wsdelivery/*.go"
+          allow:
+            - $gostd
+            - github.com/AkinoriS83/ca-chat-app/server/internal/application/port$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/domain$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/openapi$
+
+        adapter-postgres:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/postgres/*.go"
+          allow:
+            - $gostd
+            - github.com/AkinoriS83/ca-chat-app/server/internal/application/port$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/domain$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/adapter/postgres/sqlcgen$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/adapter/postgres/pgtest$
+            - github.com/jackc/pgx/v5
+
+        adapter-postgres-sqlcgen:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/postgres/sqlcgen/*.go"
+          allow:
+            - $gostd
+            - github.com/jackc/pgx/v5
+
+        adapter-postgres-pgtest:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/postgres/pgtest/*.go"
+          allow:
+            - $gostd
+            - github.com/jackc/pgx/v5
+
+        adapter-fixeduser:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/fixeduser/*.go"
+          allow:
+            - $gostd
+            - github.com/AkinoriS83/ca-chat-app/server/internal/application/port$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/domain$
+
+        # 生成した通信の形式の型: どの層も、import しない。
+        openapi:
+          list-mode: strict
+          files:
+            - "**/internal/openapi/*.go"
+          allow:
+            - $gostd
+            - github.com/oapi-codegen/runtime
+
+        # 規則のないパッケージ: internal の下に、上のどれにも当たらないファイルがあれば、
+        # すべての import を、違反とする。パッケージを加えるときに、規則を加えることを強いる。
+        # main(cmd/server)は、すべてを import してよいため、規則を置かない。
+        unlisted-package:
+          list-mode: strict
+          files:
+            - "**/internal/**/*.go"
+            - "!**/internal/domain/*.go"
+            - "!**/internal/application/port/*.go"
+            - "!**/internal/application/usecase/*.go"
+            - "!**/internal/adapter/httpapi/*.go"
+            - "!**/internal/adapter/wsaccept/*.go"
+            - "!**/internal/adapter/wsdelivery/*.go"
+            - "!**/internal/adapter/postgres/*.go"
+            - "!**/internal/adapter/postgres/sqlcgen/*.go"
+            - "!**/internal/adapter/postgres/pgtest/*.go"
+            - "!**/internal/adapter/fixeduser/*.go"
+            - "!**/internal/openapi/*.go"
+          # depguard は、空の一覧を受け付けない。存在しないパッケージを、1つだけ挙げる。
+          allow:
+            - github.com/AkinoriS83/ca-chat-app/server/internal/no-such-package$
+
+issues:
+  # 違反を、すべて報告する(既定では、同じ内容の報告が、3件までに絞られる)。
+  max-issues-per-linter: 0
+  max-same-issues: 0
