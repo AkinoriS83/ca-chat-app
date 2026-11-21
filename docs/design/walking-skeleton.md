@@ -91,7 +91,7 @@ Go のモジュールのパスは、公開先のリポジトリのパスに合�
 |---|---|---|
 | クライアントの開発用のサーバー(Vite) | 127.0.0.1:5173 | ブラウザは、`http://localhost:5173` にアクセスする。`/api` で始まる要求と、WebSocket の接続を、サーバーへ中継する |
 | サーバー | 127.0.0.1:8080 | |
-| PostgreSQL(コンテナ) | 127.0.0.1:5432 | |
+| PostgreSQL(コンテナ) | 127.0.0.1:5432 | Docker Desktop が、WSL2 の中と、Windows の側の、127.0.0.1 に公開する(6.2) |
 | E2Eテスト用の、サーバーと、クライアントの開発用のサーバー | 127.0.0.1:18080、127.0.0.1:15173 | E2Eテストの手順が起動する(7.4) |
 
 ### 値の一覧
@@ -616,15 +616,39 @@ type Outgoing = { sendId: string; body: string; status: 'sending' | 'failed' }
 
 Go、Node.js(24 系。`client/.nvmrc` に記録する)、Docker(Docker Compose を含む)、make、C のコンパイラ(sqlc のビルドに要る)。
 
-2026-11-20 の時点で、開発者の端末(WSL2)では、`docker` コマンドを使えません。Docker Desktop の、WSL との連携が、無効になっています。実装の最初に、有効にします(9 の手順0)。
+Docker は、Windows の側の Docker Desktop を、WSL との連携によって使います(ADR-007)。連携は、2026-11-21 に有効にしました(Docker Engine 29.9.3、Docker Compose v5.7.0)。WSL2 の中に、Docker Engine は導入しません。`docker` を使う手順(`make db-up`、`make test-server`、`make e2e` など)の前に、Windows の側で、Docker Desktop を起動しておきます。
+
+PostgreSQL のクライアント(`psql`)は、端末に導入しません。保管先のコンテナの中のものを、`docker compose exec` で使います(7.1、7.4)。
 
 ### 6.2 保管先と秘密
 
-- `compose.yaml` は、PostgreSQL のイメージを、マイナー版まで指定して固定する(着手の時点の 18 系の最新。2026-11-20 の時点では、18.7)。データは、名前を付けたボリュームに置く。公開するポートは、`127.0.0.1:5432` に限る。
+**保管先の定義(`compose.yaml`)**
+
+- プロジェクトの名前を、定義の中で定める(`name: ca-chat-app`)。コンテナとボリュームの名前が、リポジトリを置いたディレクトリの名前に依らなくなる。
+- イメージは、Docker の公式イメージ `postgres` を、マイナー版まで指定して固定する(着手の時点の 18 系の最新。2026-11-21 の時点では、`postgres:18.7`)。
+- データは、名前を付けたボリュームに置く。マウントする先は、`/var/lib/postgresql` とする。18 のイメージは、データを置く場所が、17 までの `/var/lib/postgresql/data` から変わっている。
+- 公開するポートは、`127.0.0.1:${PGPORT:?}:5432` に限る。`PGPORT` の見本の値は、5432 とする。
+- 起動の確認(healthcheck)を定める。`pg_isready -h 127.0.0.1` で、TCP での接続を確かめる。初回の起動では、イメージが、初期化のために、TCP で待ち受けないサーバーを一時的に動かす。ソケットで確かめると、その間に、起動したと判定してしまう。
 - ログの設定(ADR-004)は、起動の引数で与える。`log_error_verbosity=terse`、`log_statement=none`、`log_min_duration_statement=-1`、`log_parameter_max_length_on_error=0`。
-- 秘密は、`.env`(追跡しない)で与える。`.env.example` には、`PGHOST`、`PGPORT`、`PGUSER`、`PGPASSWORD`、`PGDATABASE`、`APP_ORIGIN` の名前と、秘密でない値だけを書く。`PGPASSWORD` は、空にしておく。
-- `compose.yaml` は、`${PGUSER:?}`、`${PGPASSWORD:?}` の形で参照し、与えられていなければ、起動に失敗する。
+
+**秘密**
+
+- 秘密は、リポジトリの直下の `.env`(追跡しない)で与える。Docker Compose は、`compose.yaml` と同じ場所の `.env` を、自動で読む。Makefile は、同じファイルを読んで、サーバーと道具に渡す。
+- `.env.example` には、`PGHOST`、`PGPORT`、`PGUSER`、`PGPASSWORD`、`PGDATABASE`、`APP_ORIGIN` の名前と、秘密でない値だけを書く。`PGHOST` は、`127.0.0.1` とする。`PGPASSWORD` は、空にしておく。
+- `compose.yaml` は、`${PGUSER:?}`、`${PGPASSWORD:?}`、`${PGDATABASE:?}` の形で参照し、イメージの `POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB` に渡す。与えられていなければ、起動に失敗する。
+- イメージが、利用者とパスワードを設定するのは、ボリュームが空のとき(初回の起動)だけである。`.env` の値を後から変えても、保管先には反映されない。変える場合は、ボリュームを削除して作り直す(`docker compose down -v`。開発用のデータは、失われる)。手順書に記載する。
 - `.gitignore` に、`.env`、`bin/`、`node_modules/`、ビルドとテストの出力を挙げる。
+
+**確かめたこと(2026-11-21)**
+
+上の定義に当たる、使い捨ての定義で、次を確かめました。
+
+- 秘密を与えない場合、定義の読み込みが、失敗する。
+- `docker compose up -d --wait` は、起動の確認が通ってから戻り、直後に接続できる(初回の起動で、約5秒)。
+- 公開したポートは、WSL2 の中の 127.0.0.1 と、Windows の側の 127.0.0.1 から届く。WSL2 の、他のアドレスからは、届かない。
+- `docker compose down` と起動を挟んでも、データが残る。
+- ログの設定が効き、制約への違反の記録に、詳細(DETAIL)が現れない。
+- コンテナの中の `psql` で、雛形からのデータベースの複製(`CREATE DATABASE … TEMPLATE`)ができる。
 
 ### 6.3 道具の版の固定(WS-32)
 
@@ -642,7 +666,7 @@ Go、Node.js(24 系。`client/.nvmrc` に記録する)、Docker(Docker Compose �
 | 手順 | 内容 |
 |---|---|
 | `make setup` | Go の道具を `bin/` に導入する。`npm ci`。Playwright のブラウザ(Chromium)を取得する |
-| `make db-up` / `make db-down` | 保管先を起動する / 停止する |
+| `make db-up` / `make db-down` | 保管先を起動し、接続を受け付けるまで待つ(`docker compose up -d --wait`) / 保管先を停止し、コンテナを削除する(`docker compose down`)。データ(ボリューム)は、残す |
 | `make db-migrate` | 開発用のデータベースに、マイグレーションを適用する |
 | `make dev-server` / `make dev-client` | サーバー / クライアントの開発用のサーバーを起動する |
 | `make generate` | oapi-codegen、sqlc、openapi-typescript を実行する |
@@ -702,7 +726,7 @@ Go、Node.js(24 系。`client/.nvmrc` に記録する)、Docker(Docker Compose �
 
 **テスト用のデータベース(DD-20)**
 
-- `make test-server` は、雛形のデータベース(`chat_test_template`)を作り直し、goose でマイグレーションを適用する。
+- `make test-server` は、雛形のデータベース(`chat_test_template`)を作り直し、goose でマイグレーションを適用する。作り直し(`DROP DATABASE` と `CREATE DATABASE`)は、保管先のコンテナの中の `psql` を、`docker compose exec` で実行する。goose と、テストは、端末から、127.0.0.1 に公開したポートへ接続する。
 - 保管先を使うテストは、テストごとに、雛形を複製したデータベースを作る(`CREATE DATABASE … TEMPLATE chat_test_template`)。終わったら、削除する。
 - 雛形がない場合、テストは、`make test-server` を使うよう示して、失敗する。
 
@@ -783,7 +807,7 @@ domain の本文のテストは、少なくとも次の値を含めます。
 
 - 対象は、動作検証の手順1〜5と、手順9とする(ADR-006)。ブラウザは、Chromium だけとする。
 - 1つのテストの中で、互いに状態を共有しない、複数のブラウザのコンテキストを開く。
-- `make e2e` は、E2E用のデータベース(`chat_e2e`)を作り直して、マイグレーションを適用する。Playwright が、このデータベースにつないだサーバー(127.0.0.1:18080)と、クライアントの開発用のサーバー(127.0.0.1:15173)を起動する。`APP_ORIGIN` は、`http://localhost:15173` とする。
+- `make e2e` は、E2E用のデータベース(`chat_e2e`)を作り直して、マイグレーションを適用する(手段は、7.1 の雛形と同じ)。Playwright が、このデータベースにつないだサーバー(127.0.0.1:18080)と、クライアントの開発用のサーバー(127.0.0.1:15173)を起動する。`APP_ORIGIN` は、`http://localhost:15173` とする。
 - テストは、直列に実行する。テストごとに、始める前に、`messages` と `conversations` を TRUNCATE する(DD-07)。保管先のコンテナの中の `psql` を、`docker compose exec` で実行する。サーバーは、メッセージと会話を、メモリに保持しないため、再起動は要らない。
 - クライアントの開発用のサーバーの、待ち受け先と中継先は、環境変数で変えられるようにする。
 
@@ -811,7 +835,7 @@ domain の本文のテストは、少なくとも次の値を含めます。
 
 **そのほか**
 
-- 手順7の「サーバーと保管先を再起動する」は、`make dev-server` の停止と起動、`make db-down` と `make db-up` で行う。
+- 手順7の「サーバーと保管先を再起動する」は、`make dev-server` の停止と起動、`make db-down` と `make db-up` で行う。`make db-down` は、コンテナを削除するが、ボリュームは残す(6.4)。
 - 開発者の端末は、WSL2 である。ブラウザを Windows の側で動かす場合に、`localhost` で到達できることは、実装の最初に確かめる(ADR-007。9 の手順0)。
 
 ## 9. 実装の順序
@@ -820,7 +844,7 @@ domain の本文のテストは、少なくとも次の値を含めます。
 
 | # | 手順 | 終えたときの状態 |
 |---|---|---|
-| 0 | 環境の確認。Docker の、WSL との連携を有効にする。何も実装していない Go のサーバーと Vite を、127.0.0.1 で起動し、Windows の側のブラウザから、`localhost` で、HTTP と WebSocket の両方が、中継を通って届くことを確かめる | 成り立たない場合は、ADR-007 を改める |
+| 0 | 環境の確認。Docker の、WSL との連携は、有効にし、保管先のコンテナに届くことを確かめた(6.1、6.2)。残りは、次の確認である。何も実装していない Go のサーバーと Vite を、127.0.0.1 で起動し、Windows の側のブラウザから、`localhost` で、HTTP と WebSocket の両方が、中継を通って届くことを確かめる | 成り立たない場合は、ADR-007 を改める |
 | 1 | 土台。`CLAUDE.md`、`.gitignore`、`.env.example`、`compose.yaml`、Makefile、道具の導入。`server/` と `client/` の骨組み。検査の設定(depguard、dependency-cruiser、ESLint)と、規則に違反する見本。gitleaks | `make setup`、`make db-up`、`make lint`、`make check-deps`、`make check-deps-selftest`、`make secrets-scan` が通る |
 | 2 | 通信の形式。`api/openapi.yaml` と、生成 | `make generate-check` が通る |
 | 3 | domain と usecase(送信、履歴)。テスト用のポートの実装 | domain と usecase のテストが通る |
