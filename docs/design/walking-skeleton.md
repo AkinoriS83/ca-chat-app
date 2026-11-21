@@ -44,6 +44,11 @@
 | DD-20 | テスト用のデータベースは、マイグレーションを適用した雛形のデータベースから、複製して作る | テストごとに独立したデータベース(ADR-006)を、速く作れる。goose を、サーバーの依存物に加えずに済む |
 | DD-21 | TypeScript は、5.x 系に固定する | openapi-typescript 7.13.0 が、TypeScript の 5.x 系を求める(確認済み。npm の最新は 7.0.2 である) |
 | DD-22 | 要求の本文の大きさの上限を、1 MiB とする | 正しい送信の要求は、最大でも約48KBである(4,000文字が、すべてエスケープされた場合)。上限を超える要求は、読み切らずに拒否する(WS-30) |
+| DD-23 | `httpapi` と `wsaccept` の、パッケージの中のテストは、ユースケースを組み立てずに確かめられるもの(本文の復号、Origin のミドルウェア、書き込み口など)に限る。ユースケースを通る振る舞いは、`cmd/server` のテストで確かめる。import の規則は、テストのファイルにも、同じく適用する | 2つの adapter は、usecase の具体的な型を受け取る(ADR-005)。テストでユースケースを組み立てるには、テスト用のポートの実装が要り、`application/port` と `domain` の import が、規則に当たる。テストのファイルを規則から除くと、規則の例外が要る(DD-18 と同じ) |
+| DD-24 | 依存規則と飛ばし禁止の規則は、`make check-deps` と `make check-deps-selftest` だけが実行する。`make lint` が使う設定には、含めない | `make lint` が違反を検出すると、検査の記録に残らないまま、直される(ADR-008「取り漏らしを防ぐ手段」)。規則を実行する入口を1つにすれば、検出は、必ず記録を通る |
+| DD-25 | 規則を持つ domain の値(`Body`、`SendID`)を、保管した値から組み立てるために、検証しない復元用の関数(`RestoreBody`、`RestoreSendID`)を、domain に置く。呼ぶのは、ポートを実装する adapter と、テスト用のポートの実装だけとする | 保管先の adapter は、履歴の行から `domain.Message` を組み立てる。`NewBody` と `ParseSendID` は、domain の規則であり、adapter からは呼ばない(ADR-005)。保管した値は、保管の時点で、検証を通っている。規則を変えた後も、変える前に保管した値を読める |
+| DD-26 | クライアントに、利用者の選択に戻る操作(`leaveUser`)を置く。開いている会話と同じ相手を、もう一度指定された場合は、会話の状態を作り直さない。履歴を取得できなかったときだけ、取得し直す | 利用者の選択は、利用者を選んでいないときに示す(5.4)。戻るには、接続を閉じ、利用者を空にする操作が要る(WS-41)。同じ相手の指定で作り直すと、入力中の本文と、送信できなかったメッセージが失われる(WS-17)。履歴の取得のやり直しは、この指定で行う |
+| DD-27 | サーバーは、`LISTEN_ADDR` が、ループバックのアドレス(127.0.0.0/8、::1)でない場合、起動に失敗する(仮実装 WS-P2) | 仮のログインは、なりすましを防がない。ローカルの開発環境の外から、到達できてはならない(WS-D6、ADR-007)。設定の誤りを、起動の時点で止める。フェーズ1の認証で、仮のログインとともに取り除く |
 
 DD-13 の帰結として、仕様の拒否の表にある「利用者(送信者)が参加者でない会話を指定した」は、本スライスの操作では、表せません。該当する要求の形がないためです。参加者でない利用者に対する保護(WS-23、WS-24)は、「どの操作によっても取得・送信できない」ことで確かめます(7.3)。「見つからない」応答は1種類だけであり、WS-15、WS-38 の「同じ応答」は、これで成り立ちます。
 
@@ -67,14 +72,14 @@ server/                          Go のモジュール
   internal/adapter/fixeduser/    固定ユーザー(ポートを実装する。仮実装)
   internal/openapi/              oapi-codegen が生成したコード
   migrations/                    goose のマイグレーション
-  .golangci.yml  sqlc.yaml  oapi-codegen.yaml
+  .golangci.yml  .golangci.deps.yml  sqlc.yaml  oapi-codegen.yaml
 client/                          npm のパッケージ
   src/application/  src/application/port/
   src/adapter/  src/adapter/generated/   openapi-typescript が生成した型
   src/ui/
   src/main.tsx
   e2e/                           Playwright のテスト
-  vite.config.ts  eslint.config.js  .dependency-cruiser.cjs  playwright.config.ts
+  vite.config.ts  eslint.config.js  eslint.deps.config.js  .dependency-cruiser.cjs  playwright.config.ts
 docs/
   architecture.md                アーキテクチャ概要(実装とともに作成)
   temporary-implementations.md   仮実装の箇所の一覧(実装とともに作成)
@@ -161,7 +166,7 @@ OpenAPI の文書では、操作のパラメータではなく、`securityScheme
 | `invalid_body` | 400 | 本文が WS-D3 の規則を満たさない | usecase |
 | `invalid_input` | 400 | 送信の識別子の形式が正しくない。送信の識別子が、同じ送信者の、別の会話の保管済みのメッセージと一致する | usecase |
 | `invalid_peer` | 400 | 相手として自分自身を指定した | usecase |
-| `not_found` | 404 | 相手が固定ユーザーの中に居ない。定義されていないパスと方法 | usecase、adapter |
+| `not_found` | 404 | 相手が固定ユーザーの中に居ない。定義されていないパスと方法。正規の形でないパス(4.5.1) | usecase、adapter |
 | `internal` | 500 | システムが操作を完了できなかった(WS-31) | adapter |
 
 1つの要求が、複数の場合に当たるときは、次の順で、最初に当たったものを返します。Origin → 形式 → 利用者 → 仕様の拒否の表の順(本文、送信の識別子の形式、自分自身、相手が居ない、別の会話との一致)。
@@ -209,6 +214,8 @@ ADR-005 の規則を、パッケージに当てはめたものです。depguard 
 
 - `domain` と `application` は、入出力を行う標準ライブラリのパッケージ(`net/http`、`database/sql`、`os`、`log/slog` など)を、import しない。これも、depguard の規則に含める。
 - ログは、adapter と main が出力する。`domain` と `application` は、ログを出力しない。
+- 規則は、テストのファイル(`_test.go`)にも、同じく適用する(DD-23)。
+- depguard の設定は、`server/.golangci.deps.yml` に置き、`make check-deps` と `make check-deps-selftest` だけが使う。`make lint` が使う `server/.golangci.yml` では、depguard を有効にしない(DD-24)。
 
 ### 4.2 domain
 
@@ -219,8 +226,8 @@ ADR-005 の規則を、パッケージに当てはめたものです。depguard 
 | `DirectPair` | 1on1会話の2人の `UserID`。`NewDirectPair(a, b)` で作る。2人が同じ場合は、`ErrSelfConversation` を返す。2人を、文字列の昇順に並べて保持する(どちらが相手を選んでも、同じ値になる) |
 | `ConversationID` | 会話の識別子。UUID の文字列 |
 | `Conversation` | `ID`、`Pair` |
-| `Body` | 本文。`NewBody(raw)` で作る。WS-D3 の規則を満たさない場合は、`ErrInvalidBody` を返す |
-| `SendID` | 送信の識別子。`ParseSendID(raw)` で作る。形式が正しくない場合は、`ErrInvalidSendID` を返す。小文字に揃えて保持する |
+| `Body` | 本文。入力からは、`NewBody(raw)` で作る。WS-D3 の規則を満たさない場合は、`ErrInvalidBody` を返す。保管した値からは、`RestoreBody` で組み立てる(下記) |
+| `SendID` | 送信の識別子。入力からは、`ParseSendID(raw)` で作る。形式が正しくない場合は、`ErrInvalidSendID` を返す。小文字に揃えて保持する。保管した値からは、`RestoreSendID` で組み立てる(下記) |
 | `Message` | `ConversationID`、`Seq`、`SenderID`、`SendID`、`Body`、`SentAt` |
 
 `NewBody` は、次の順で判定します。
@@ -234,6 +241,15 @@ ADR-005 の規則を、パッケージに当てはめたものです。depguard 
 `ParseSendID` は、36文字で、ハイフンが 8-4-4-4-12 の位置にあり、ほかが16進数であることだけを確かめます(ADR-009)。UUID の版は、問いません。外部のライブラリは、使いません。
 
 `DirectPair` の並びは、保管先の `uuid` の型の大小と一致します。どちらも、小文字の16進数の、先頭からの比較になるためです。
+
+`Body` と `SendID` は、中の値を、パッケージの外から直接には作れない型とします(公開しない項目を持つ構造体)。作る手段は、次の2つです(DD-25)。
+
+- `NewBody`、`ParseSendID`: 入力から作る。規則を確かめる。usecase が呼ぶ。
+- `RestoreBody(stored)`、`RestoreSendID(stored)`: 保管した値から組み立てる。検証しない。ポートを実装する adapter(`postgres`)と、テスト用のポートの実装だけが呼ぶ。usecase からは、呼ばない。`postgres` は、`uuid` の値を、小文字の36文字の文字列にして、`RestoreSendID` に渡す。
+
+復元用の関数を呼んでよい箇所は、import の検査では区別できません。規約とし、関数の名前を検索して確かめます(6.5)。
+
+`UserID` と `ConversationID` は、規則を持たない、文字列の型とします。adapter は、型の変換で作ります。`DirectPair` を、保管した値から組み立てる箇所は、ありません。`FindDirect` と `EstablishDirect` は、渡された `pair` を、そのまま `Conversation` に入れます。
 
 ### 4.3 application/port
 
@@ -388,7 +404,9 @@ type RejectedError struct{ Kind Rejection } // error を実装する
 - `httpapi` は、Origin を検証するミドルウェアを公開する。Origin ヘッダーがあり、設定で与えたアプリのオリジンと一致しない要求に、`forbidden_origin`(403)を返す。Origin がない要求は、通す(ADR-002)。
 - main は、このミドルウェアで、HTTP の操作と、WebSocket の接続先の両方を包む。
 - CORS のヘッダーは、どの応答にも付けない。`OPTIONS` は、定義されていない方法として、`not_found` を返す。
-- 定義されていないパスと方法には、`not_found` を返す。Go の既定の応答(文言)を、使わない。
+- 定義されていないパスと方法には、`not_found` を返す。Go の既定の応答(文言)を、使わない。そのために、`httpapi` は、次の2つを公開し、main が組み込む。
+  - すべてのパスを受ける受け皿。ServeMux に、`/` として登録する。受け皿があると、パスは定義されているが方法が違う要求も、ServeMux の 405 ではなく、受け皿に届く(2026-11-21 に確かめた)。
+  - パスが正規の形でない要求(空の要素、`.`、`..` を含む。`path.Clean` の結果と一致しない)に、`not_found` を返すミドルウェア。ServeMux より前に置く。ServeMux は、これらの要求に、307 と HTML の本文を返すためである(`//` を含むパスについて、2026-11-21 に確かめた)。
 
 #### 4.5.2 wsaccept(接続の受け付け)
 
@@ -396,7 +414,7 @@ type RejectedError struct{ Kind Rejection } // error を実装する
 
 書き込み口(`port.ConnectionSink` を満たす型)は、長さ256の送信待ちの列と、閉じたことを示す印を持ちます。
 
-- `Send` は、列に加えて、待たずに戻る。列が一杯であれば、加えずに、`false` を返す。
+- `Send` は、列に加えて、待たずに戻る。列が一杯であれば、加えずに、`false` を返す。`Close` の後に呼ばれた場合も、加えずに、`false` を返す。`Close` から、登録の解除までの間に、`Deliver` が `Send` を呼びうるためである。列(チャネル)そのものは、閉じない。
 - `Close` は、閉じたことを印す。何度呼んでもよい。
 
 要求の処理は、次の順です(DD-17)。
@@ -479,9 +497,11 @@ CREATE TABLE messages (
 
 | `ID` | `Handle` | `DisplayName` |
 |---|---|---|
-| `00000000-0000-4000-8000-000000000001` | alice | Alice |
-| `00000000-0000-4000-8000-000000000002` | bob | Bob |
-| `00000000-0000-4000-8000-000000000003` | carol | Carol |
+| `00000000-0000-4000-8000-000000000003` | alice | Alice |
+| `00000000-0000-4000-8000-000000000001` | bob | Bob |
+| `00000000-0000-4000-8000-000000000002` | carol | Carol |
+
+`ID` の順は、識別名の順と、わざと変えてあります。`participants` は、識別名の昇順であり(3.3)、`DirectPair` は、`ID` の昇順です(4.2)。2つの順が同じだと、`participants` を `DirectPair` の順のまま返す誤りを、テストで検出できません。alice と bob、alice と carol の組で、順が異なります(7.3 の WS-37)。
 
 ### 4.6 main(`cmd/server`)
 
@@ -491,9 +511,11 @@ CREATE TABLE messages (
 |---|---|
 | `PGHOST`、`PGPORT`、`PGUSER`、`PGPASSWORD`、`PGDATABASE` | 保管先への接続情報。pgx が、そのまま読む。接続文字列には、組み立てない |
 | `APP_ORIGIN` | アプリのオリジン(ローカルでは、`http://localhost:5173`) |
-| `LISTEN_ADDR` | 待ち受け先。既定は、`127.0.0.1:8080` |
+| `LISTEN_ADDR` | 待ち受け先。既定は、`127.0.0.1:8080`。ループバックのアドレスに限る(DD-27。仮実装 WS-P2) |
 
 `PGUSER`、`PGPASSWORD`、`PGDATABASE`、`APP_ORIGIN` のいずれかがない場合、サーバーは、既定の値で動かず、起動に失敗します(ADR-007)。
+
+`LISTEN_ADDR` のホストが、ループバックのアドレス(127.0.0.0/8、::1)の表記でない場合も、起動に失敗します。ホストの名前(`localhost` を含む)と、ホストのない形(`:8080`)は、受け付けません。設定の読み込みは、環境変数の値を受け取る関数にまとめ、`cmd/server` のテストで確かめます。
 
 **組み立て**
 
@@ -514,12 +536,13 @@ CREATE TABLE messages (
 |---|---|---|
 | `src/application/` | `chatApp.ts`(状態と操作)、`model.ts`(型)、`messages.ts`(統合の関数) | application の中だけ |
 | `src/application/port/` | `chatApi.ts`、`realtimeChannel.ts`、`timer.ts`、`sendIdSource.ts`、`fixedUserDirectory.ts` | application の中だけ |
-| `src/adapter/` | ポートの実装。`generated/` に、生成した型 | `application/port` と、そこから参照される application の型 |
+| `src/adapter/` | ポートの実装。`generated/` に、生成した型 | `application/port/` と、`application/model.ts`(ポートが参照する型。型だけの import) |
 | `src/ui/` | React の部品 | application(port を除く) |
 | `src/main.tsx` | 組み立てと起動 | すべて |
 
 - 生成した型(`adapter/generated/`)は、adapter だけが import する。
-- application は、React と、ブラウザの入出力のAPI(`fetch`、`WebSocket`、`setTimeout`、`crypto`、`window`、`document`、`localStorage` など)を使わない。ESLint の規則(`no-restricted-globals`、`no-restricted-imports`)で検査する。
+- application は、React と、ブラウザの入出力のAPI(`fetch`、`WebSocket`、`setTimeout`、`crypto`、`window`、`document`、`localStorage` など)を使わない。ESLint の規則(`no-restricted-globals`、`no-restricted-imports`)で検査する。この規則は、`eslint.deps.config.js` に置き、`make check-deps` と `make check-deps-selftest` だけが使う。`make lint` が使う `eslint.config.js` には、含めない(DD-24)。
+- adapter から、`chatApp.ts` と `messages.ts` への import は、違反である。dependency-cruiser は、型だけの import も、対象にする(`tsPreCompilationDeps`)。
 - 実行時の依存物は、react と react-dom だけとする。HTTP の要求は、`fetch` を直接に使う。
 
 ### 5.2 application
@@ -545,7 +568,7 @@ type Message  = { seq: number; sender: { handle: string; displayName: string }; 
 type Outgoing = { sendId: string; body: string; status: 'sending' | 'failed' }
 ```
 
-**操作**: `selectUser(handle)`、`openConversation(peerHandle)`、`setDraft(text)`、`send()`、`resend(sendId)`。
+**操作**: `selectUser(handle)`、`leaveUser()`、`openConversation(peerHandle)`、`setDraft(text)`、`send()`、`resend(sendId)`。
 
 **規則**
 
@@ -553,17 +576,18 @@ type Outgoing = { sendId: string; body: string; status: 'sending' | 'failed' }
 
 | # | 規則 | 基準 |
 |---|---|---|
-| C-1 | `selectUser` は、それまでの接続を閉じ、会話の状態を捨ててから、新しい利用者として、接続を確立する。選び直す前の接続、履歴の取得、送信に対して、後から届いた結果は、すべて捨てる | WS-41 |
-| C-2 | `openConversation` は、会話の状態を作り直す(`history: 'loading'`)。接続が、受信を開始できたことの知らせ(`ready`)を受けた後であれば、すぐに履歴を取得する。接続を確立している途中であれば、`ready` を待ってから取得する。接続が切れている場合は、待たずに取得する | ADR-010、WS-22 |
+| C-1 | `selectUser` は、それまでの接続を閉じ、会話の状態を捨ててから、新しい利用者として、接続を確立する。`leaveUser` は、接続を閉じ、会話の状態を捨てて、利用者を選んでいない状態(`currentUser: null`)に戻す。どちらの場合も、それより前の接続、履歴の取得、送信に対して、後から届いた結果は、すべて捨てる | WS-41 |
+| C-2 | `openConversation` は、会話の状態を作り直す(`history: 'loading'`)。開いている会話と同じ相手を指定された場合は、C-12 による。接続が、受信を開始できたことの知らせ(`ready`)を受けた後であれば、すぐに履歴を取得する。接続を確立している途中であれば、`ready` を待ってから取得する。待つ間に、接続の確立に失敗した場合と、接続が切れた場合は、その時点で取得する。接続が切れている場合は、待たずに取得する | ADR-010、WS-22 |
 | C-3 | 履歴、完了の応答、配信のどれで届いたメッセージも、連番をキーとして、`messages` に加える。同じ連番のものが既にあれば、加えない。並びは、連番の順とする | WS-07、WS-22、WS-37 |
 | C-4 | 配信は、`participants` が、自分と、開いている会話の相手の組に一致するものだけを、加える。一致しないものは、捨てる。履歴の取得中に届いた配信も、同じ規則で、すぐに加える(履歴が届いたとき、C-3 で統合される) | 仕様「リアルタイムの配信」、WS-22 |
 | C-5 | `send` は、`draft` が空の文字列であれば、何もしない。そうでなければ、送信の識別子を作り、`outgoing` に `sending` として加え、`draft` と `rejection` を空にして、送信する。同時に、10秒の時間の経過を待ち始める | UC-09 基本フロー |
-| C-6 | 完了の応答、または、同じ送信の識別子を持つ配信の、先に届いた方で、その `outgoing` を除き、メッセージを C-3 で加える。後から届いた方は、C-3 によって、加わらない | WS-37、ADR-011 |
+| C-6 | 完了の応答、または、同じ送信の識別子を持ち、送信者が自分である配信の、先に届いた方で、その `outgoing` を除き、メッセージを C-3 で加える。後から届いた方は、C-3 によって、加わらない。送信者が自分でない配信は、送信の識別子が一致しても、`outgoing` を除かず、通常の配信として扱う(C-4)。一致は、送信者ごとに判定するためである | WS-37、ADR-009、ADR-011 |
 | C-7 | 拒否の応答で、その `outgoing` を除き、`rejection` に理由を入れ、本文を `draft` に戻す。`draft` に別の入力がある場合は、その前に、改行で区切って戻す | WS-40 |
 | C-8 | 送信が届かない場合、完了できなかったことを示す応答の場合、10秒が過ぎた場合に、その `outgoing` を `failed` にする。要求は、取り消さない | WS-17 |
 | C-9 | `resend` は、`failed` の `outgoing` を、同じ送信の識別子と本文で、`sending` に戻して、送信する。10秒を、改めて待ち始める | WS-17、WS-18 |
 | C-10 | `failed` にした後に、完了の応答、配信、拒否の応答が届いた場合も、C-6、C-7 を行う。その `outgoing` が既にない場合は、応答を捨てる。送り直しの前の試行の、失敗と時間切れは、捨てる | ADR-011 |
 | C-11 | 別の会話を開いたとき、それまでの会話の状態(`outgoing` と `draft` を含む)を捨てる。前の会話に対して、後から届いた結果は、捨てる | 仕様「メッセージを送る」(送信できなかったメッセージを保つ範囲) |
+| C-12 | 開いている会話と同じ相手を、`openConversation` で指定された場合、会話の状態(`messages`、`outgoing`、`draft`、`rejection`)を保つ。`history` が `failed` であれば、`loading` に戻して、C-2 の通りに取得し直す。そのほかの場合は、何もしない | WS-17、DD-26 |
 
 - C-7 の「前に戻す」は、拒否された本文と、その後の入力の、どちらも失わないための決めである。DD-12 により、拒否は通常の経路になるが、往復の間に、次の入力を始めていることは、まれである。
 - 固定ユーザーの選択は、メモリの上にだけ持つ。再読み込みすると、選択からやり直す(DD-11)。保つには、保存のためのポートが要り、仮のログインは、フェーズ1で置き換えるためである。
@@ -597,9 +621,9 @@ type Outgoing = { sendId: string; body: string; status: 'sending' | 'failed' }
 | 部品 | 内容 |
 |---|---|
 | 利用者の選択(`UserPicker`) | 利用者を選んでいないとき、固定ユーザー3人のボタンを示す |
-| ヘッダー | 選んだ利用者の表示名と、「利用者を選び直す」ボタン。押すと、利用者の選択に戻る |
+| ヘッダー | 選んだ利用者の表示名と、「利用者を選び直す」ボタン。押すと、`leaveUser` を呼び、利用者の選択に戻る(C-1) |
 | 相手の選択(`PeerPicker`) | 自分以外の固定ユーザーのボタン。選んでいる相手を、見分けられるようにする |
-| 会話(`ConversationView`) | メッセージを、連番の順に示す。その後ろに、送信中と、送信できなかったメッセージを示す。メッセージがなければ、「メッセージはありません」と示す。取得中と、取得できなかったことを示す |
+| 会話(`ConversationView`) | メッセージを、連番の順に示す。その後ろに、送信中と、送信できなかったメッセージを示す。メッセージがなければ、「メッセージはありません」と示す。取得中であることを示す。取得できなかった場合は、そのことと、「取得し直す」ボタンを示す。押すと、同じ相手で `openConversation` を呼ぶ(C-12) |
 | メッセージ(`MessageItem`) | 送信者の表示名、送信の日時(端末の地域の時刻)、本文。送信中は「送信中」、送信できなかったものは「送信できませんでした」と「送り直す」ボタンを示す |
 | 入力欄(`Composer`) | 複数行の入力欄と、「送信」ボタン。拒否の理由を、入力欄の近くに示す |
 
@@ -614,7 +638,7 @@ type Outgoing = { sendId: string; body: string; status: 'sending' | 'failed' }
 
 ### 6.1 開発者の端末に要るもの
 
-Go、Node.js(24 系。`client/.nvmrc` に記録する)、Docker(Docker Compose を含む)、make、C のコンパイラ(sqlc のビルドに要る)。
+Go、Node.js(24 系。`client/.nvmrc` に記録する)、Docker(Docker Compose を含む)、make、C のコンパイラ(sqlc のビルドと、`go test -race` に要る)。
 
 Docker は、Windows の側の Docker Desktop を、WSL との連携によって使います(ADR-007)。連携は、2026-11-21 に有効にしました(Docker Engine 29.9.3、Docker Compose v5.7.0)。WSL2 の中に、Docker Engine は導入しません。`docker` を使う手順(`make db-up`、`make test-server`、`make e2e` など)の前に、Windows の側で、Docker Desktop を起動しておきます。
 
@@ -671,10 +695,10 @@ PostgreSQL のクライアント(`psql`)は、端末に導入しません。保�
 | `make dev-server` / `make dev-client` | サーバー / クライアントの開発用のサーバーを起動する |
 | `make generate` | oapi-codegen、sqlc、openapi-typescript を実行する |
 | `make generate-check` | 生成し直した結果が、リポジトリの内容と一致することを確かめる |
-| `make lint` | golangci-lint、ESLint、TypeScript の型の検査 |
-| `make check-deps` | 依存規則と飛ばし禁止の検査(depguard、dependency-cruiser、application に対する ESLint の規則)。違反を検出したとき、日時と出力を、`docs/dependency-check-log.md` に追記して、失敗する |
-| `make check-deps-selftest` | 規則に違反する見本に対して、検査が失敗することを確かめる。検査の記録には、追記しない |
-| `make test-server` | テスト用の雛形のデータベースを作り直してから、`go test ./...` を実行する |
+| `make lint` | golangci-lint、ESLint、TypeScript の型の検査。依存規則と飛ばし禁止の規則は、含めない(DD-24) |
+| `make check-deps` | 依存規則と飛ばし禁止の検査(depguard、dependency-cruiser、application に対する ESLint の規則)。専用の設定(`server/.golangci.deps.yml`、`client/.dependency-cruiser.cjs`、`client/eslint.deps.config.js`)で実行する。違反を検出したとき、日時と出力を、`docs/dependency-check-log.md` に追記して、失敗する |
+| `make check-deps-selftest` | 規則に違反する見本のそれぞれが、違反として検出されることを確かめる。検査の記録には、追記しない |
+| `make test-server` | テスト用の雛形のデータベースを作り直してから、`go test -race -count=1 ./...` を実行する(7.1) |
 | `make test-client` | Vitest を実行する |
 | `make e2e` | E2Eテストを実行する(7.4) |
 | `make secrets-scan` | gitleaks を、リポジトリの履歴の全体に対して実行する(WS-34) |
@@ -682,9 +706,11 @@ PostgreSQL のクライアント(`psql`)は、端末に導入しません。保�
 
 **規則に違反する見本(ADR-005「検査の手段」)**
 
-- サーバーは、見本を、対象のパッケージの中に、ビルドタグ(`depcheck_sample`)を付けたファイルとして置く。通常のビルドと検査には、含まれない。`check-deps-selftest` は、このタグを付けて depguard を実行し、すべての見本が検出されることを確かめる。
-- 見本は、少なくとも次を含める。`httpapi` → `application/port`、`httpapi` → `domain`、`httpapi` → `adapter/postgres`、`wsaccept` → `application/port`、`wsdelivery` → `application/usecase`、`application/usecase` → adapter、`domain` → `application/port`、`domain` → `net/http`。
-- クライアントは、見本を、各層の `__depcheck__/` に置く。通常の検査とビルドからは、除く。見本は、`ui` → `adapter`、`adapter` → `ui`、`ui` → `application/port`、`application` → `adapter`、`application` → `react`、`application` での `fetch` の使用を含める。
+- サーバーは、見本を、対象のパッケージの中に、ビルドタグ(`depcheck_sample`)を付けたファイルとして置く。1つのファイルには、違反する import を、1つだけ書く。通常のビルドと検査には、含まれない。
+- `check-deps-selftest` は、このタグを付けて depguard を実行し、出力に、見本のファイルごとの、depguard の違反があることを確かめる。1つでも欠けていれば、失敗とする。出力に、型検査の失敗(typecheck)がある場合も、失敗とする。
+- 見本は、少なくとも次を含める。`httpapi` → `application/port`、`httpapi` → `domain`、`httpapi` → `adapter/postgres`、`wsaccept` → `application/port`、`wsdelivery` → `application/usecase`、`application/usecase` → `adapter/postgres`、`domain` → `openapi`、`domain` → `net/http`。
+- import が循環する見本(`domain` → `application/port`、`application/usecase` → `adapter/httpapi` など)は、置かない。循環は、コンパイラが拒否する(ADR-001)。循環する見本があると、検査は、型検査の失敗を1件報告するだけになり、他の見本の違反も、報告しなくなる(golangci-lint 2.13.2 で、2026-11-21 に確かめた)。
+- クライアントは、見本を、各層の `__depcheck__/` に置く。通常の検査とビルドからは、除く。見本は、`ui` → `adapter`、`adapter` → `ui`、`ui` → `application/port`、`application` → `adapter`、`adapter` → `application/chatApp.ts`、`application` → `react`、`application` での `fetch` の使用を含める。
 
 ### 6.5 AIへの常設の指示(`CLAUDE.md`。DD-09)
 
@@ -692,7 +718,8 @@ PostgreSQL のクライアント(`psql`)は、端末に導入しません。保�
 
 - 観察記録の規則(ADR-008「都度の記録」の、記録する出来事と項目)。当たることが起きた時点で、`docs/observations.md` に追記すること。
 - 層と、import してよい先の規則の所在(アーキテクチャ概要と ADR-005)。検査が失敗したとき、規則の側を緩めて通さないこと。
-- 規約として守ること(import の検査では、検出できないもの)。ポートを実装する adapter から、domain の規則を呼ばない。トランザクションの関数の中で、渡された操作のほかに、ポートを呼ばない。main は、adapter に、import してよい層のものだけを渡す。
+- 規約として守ること(import の検査では、検出できないもの)。ポートを実装する adapter から、domain の規則を呼ばない。トランザクションの関数の中で、渡された操作のほかに、ポートを呼ばない。main は、adapter に、import してよい層のものだけを渡す。復元用の関数(`Restore…`)を、usecase から呼ばない(DD-25)。`httpapi` と `wsaccept` のテストで、ユースケースを組み立てない(DD-23)。
+- 依存規則と飛ばし禁止の検査は、`make check-deps` で実行すること。検査の道具を、専用の設定を指定して、直接には実行しない。検査の記録に、残らないためである(DD-24)。
 - メッセージの本文と、保管先のエラーの文言を、ログに出力しないこと。
 - 仮実装の箇所に、`仮実装(WS-Pn)` のコメントを付け、一覧を更新すること。
 - 変更の後に、`make check` を実行すること。
@@ -706,7 +733,7 @@ PostgreSQL のクライアント(`psql`)は、端末に導入しません。保�
 | ID | 箇所 |
 |---|---|
 | WS-P1 | `server/internal/adapter/fixeduser/`。`client/src/adapter/staticFixedUsers.ts`。保管先に、利用者の表と外部キーがないこと |
-| WS-P2 | `httpapi` と `wsaccept` の、利用者を要求から取り出す箇所。`api/openapi.yaml` の `securitySchemes`。`httpChatApi.ts` と `webSocketRealtime.ts` の、利用者を添える箇所。ui の `UserPicker` |
+| WS-P2 | `httpapi` と `wsaccept` の、利用者を要求から取り出す箇所。`api/openapi.yaml` の `securitySchemes`。`httpChatApi.ts` と `webSocketRealtime.ts` の、利用者を添える箇所。ui の `UserPicker`。main の、`LISTEN_ADDR` をループバックのアドレスに限る箇所(DD-27) |
 | WS-P3 | ui の `PeerPicker`。`staticFixedUsers.ts` |
 | WS-P4 | `ConversationReader.ListMessages` と、その問い合わせ。`listDirectMessages` の応答 |
 
@@ -718,7 +745,7 @@ PostgreSQL のクライアント(`psql`)は、端末に導入しません。保�
 |---|---|---|
 | domain のテスト | `server/internal/domain/` | 使わない |
 | usecase のテスト | `server/internal/application/usecase/`。ポートは、手で書いたテスト用の実装に差し替える | 使わない |
-| adapter のテスト | 各 adapter のパッケージ | `postgres` だけが使う |
+| adapter のテスト | 各 adapter のパッケージ。`httpapi` と `wsaccept` は、ユースケースを組み立てずに確かめられるもの(本文の復号、Origin のミドルウェア、共通の応答、書き込み口)に限る(DD-23) | `postgres` だけが使う |
 | サーバーの振る舞いのテスト | `server/cmd/server/`(DD-18) | 使う |
 | クライアントの application のテスト | `client/src/application/`。ポートは、テスト用の実装に差し替える。時間は、テストから進める | — |
 | クライアントの adapter と ui のテスト | `client/src/adapter/`、`client/src/ui/`。jsdom の上で実行する | — |
@@ -729,6 +756,8 @@ PostgreSQL のクライアント(`psql`)は、端末に導入しません。保�
 - `make test-server` は、雛形のデータベース(`chat_test_template`)を作り直し、goose でマイグレーションを適用する。作り直し(`DROP DATABASE` と `CREATE DATABASE`)は、保管先のコンテナの中の `psql` を、`docker compose exec` で実行する。goose と、テストは、端末から、127.0.0.1 に公開したポートへ接続する。
 - 保管先を使うテストは、テストごとに、雛形を複製したデータベースを作る(`CREATE DATABASE … TEMPLATE chat_test_template`)。終わったら、削除する。
 - 雛形がない場合、テストは、`make test-server` を使うよう示して、失敗する。
+- `go test` には、`-count=1` を付ける。マイグレーションのファイルは、Go のテストの入力として追跡されない。付けないと、マイグレーションを変えても、キャッシュされた結果が返る。
+- `go test` には、`-race` も付ける。並行の送信(WS-07、WS-18)と、配信の状態の排他(4.5.3)を、確かめるためである。
 
 **サーバーの振る舞いのテストの道具立て**
 
@@ -782,16 +811,16 @@ PostgreSQL のクライアント(`psql`)は、端末に導入しません。保�
 | WS-27 | ui: `<script>`、イベントの属性を持つタグ、HTML の実体参照を含む本文が、文字として示され、要素が作られない。E2E |
 | WS-28 | 振る舞い: 引用符、`;`、`--`、`%`、`$1`、`\` を含む本文が、そのまま返る |
 | WS-29 | 振る舞い: 他のオリジンを Origin に持つ、送信、履歴の取得、接続の確立が、403 になり、保管されない。CORS のヘッダーが、どの応答にもない。`OPTIONS` に、許可を返さない。Origin も利用者もない GET が、401 になる |
-| WS-30 | 振る舞い: 壊れた JSON、型の違う項目、大きすぎる要求、定義されていないパスと方法、保管の失敗に対する応答が、`code` だけを持ち、決めた文字列(パッケージの名前、SQL、ファイルのパス、`goroutine` など)を含まない。応答のヘッダーに、ソフトウェアの名前と版がない |
+| WS-30 | 振る舞い: 壊れた JSON、型の違う項目、大きすぎる要求、定義されていないパスと方法、正規の形でないパス(`//` を含むパスなど)、保管の失敗に対する応答が、`code` だけを持ち、決めた文字列(パッケージの名前、SQL、ファイルのパス、`goroutine` など)を含まない。応答のヘッダーに、ソフトウェアの名前と版がない |
 | WS-31 | 振る舞い: トランザクションのポートを、確定の直前に失敗する実装で包んで、組み立てる。応答は `internal`。履歴に現れず、配信されない(番兵)。usecase: 保管が失敗したとき、配信のポートを呼ばない |
 | WS-32 | 検査: 6.3 の表の通りに、固定されていること。`go mod verify` と `npm ci` が成功すること |
 | WS-33 | 振る舞い: ログの出力先を差し替え、目印の文字列を本文に含む送信を、完了、拒否、エラーのそれぞれで行う。出力に、目印が現れない。`postgres` のテスト: 制約への違反を起こし、返るエラーの文言に、行の内容が含まれない |
 | WS-34 | `make secrets-scan` |
 | WS-35 | `make check-deps`。状態が、`wsdelivery` だけにあることを、設計の確認として、アーキテクチャ概要に記載する |
 | WS-36 | ADRの確認: ADR-001、ADR-002、ADR-004 の「選定の条件の確認」に、複数サーバー構成への移行の確認があること |
-| WS-37 | 振る舞い: 送信した利用者の接続が、送信の識別子を持つイベントを受け取る。完了の応答、履歴、配信の `Message` が、一致する(ADR-005 の、変換が2箇所にあることの検出)。application: 応答が先の場合と、配信が先の場合のどちらでも、1通だけになる(C-6) |
+| WS-37 | 振る舞い: 送信した利用者の接続が、送信の識別子を持つイベントを受け取る。完了の応答、履歴、配信の `Message` が、一致する(ADR-005 の、変換が2箇所にあることの検出)。`ID` の順と、識別名の順が異なる組(alice と bob)で確かめ、`participants` が、識別名の昇順であることも確かめる(4.5.5)。application: 応答が先の場合と、配信が先の場合のどちらでも、1通だけになる。送信者が自分でない配信は、送信の識別子が一致しても、`outgoing` を除かない(C-6) |
 | WS-40 | application: C-7。ui: 理由が示され、本文が入力欄に残り、会話に示されない。動作検証 |
-| WS-41 | application: C-1。振る舞い: 閉じた接続が、登録から除かれる。E2E |
+| WS-41 | application: C-1。`wsdelivery` のテスト: 登録を解いた書き込み口に、`Send` が呼ばれない。振る舞い: alice としての接続を閉じ、carol として接続し直した後、alice と bob の会話のメッセージが、その接続に届かない(番兵)。E2E |
 
 domain の本文のテストは、少なくとも次の値を含めます。
 
@@ -851,7 +880,7 @@ domain の本文のテストは、少なくとも次の値を含めます。
 | 4 | 保管先。マイグレーション、問い合わせ、`postgres` の adapter | `postgres` のテストが通る |
 | 5 | `fixeduser`、`httpapi`、main。HTTP だけの、振る舞いのテスト(送信、履歴、検証と拒否、送り直し、Origin、エラー応答、ログ) | 配信に関わらない基準の、振る舞いのテストが通る |
 | 6 | リアルタイム。`ConnectionKeeper`、`wsaccept`、`wsdelivery`。配信に関わる振る舞いのテスト | サーバーの自動テストが、すべて通る |
-| 7 | クライアントの application と、そのテスト | C-1〜C-11 のテストが通る |
+| 7 | クライアントの application と、そのテスト | C-1〜C-12 のテストが通る |
 | 8 | クライアントの adapter、ui、main | クライアントの自動テストが通る。ブラウザで、やり取りできる |
 | 9 | E2Eテスト | `make e2e` が通る |
 | 10 | 文書と動作検証(10.1) | 完了条件を満たす |

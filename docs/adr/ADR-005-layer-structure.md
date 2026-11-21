@@ -88,7 +88,7 @@ WebSocket は、接続を受け付けて利用者を特定すること(ユース
 | システムの外との境界 | 通信の形式([ADR-003](ADR-003-api-contract-definition.md))と、保管先の表現([ADR-004](ADR-004-data-store.md))は、内側の型とは別の型とし、adapter の中で詰め替える |
 
 - ユースケースを呼ぶ境界に専用のデータ構造を置くのは、ユースケースを呼ぶ adapter に、domain の import を許さないためである。許すと、domain の規則を adapter から直接呼ぶ経路(application の飛ばし)を、import の検査で検出できなくなる。
-- 拒否の種類(本文が正しくない、相手にできない、見つからない、入力が正しくない)も、usecase が定義する。domain が返した規則の違反は、usecase が、拒否の種類に置き換える。ユースケースを呼ぶ adapter は、domain を import できず、domain が定義したエラーを判別できないためである。拒否の種類の定義は、境界要素に数える([ADR-008](ADR-008-observation-records.md))。
+- 拒否の種類(利用者を特定できない、本文が正しくない、相手にできない、見つからない、入力が正しくない)も、usecase が定義する。domain が返した規則の違反は、usecase が、拒否の種類に置き換える。ユースケースを呼ぶ adapter は、domain を import できず、domain が定義したエラーを判別できないためである。拒否の種類の定義は、境界要素に数える([ADR-008](ADR-008-observation-records.md))。
 - 接続を受け付けるユースケースの入力は、例外として、application/port が定義する、接続への書き込み口のインターフェイスを含む(「WebSocket を扱う adapter の分割」)。
 - ポートの境界に専用のデータ構造を置かないのは、すべての境界での詰め替えを避けるためである(仮説「仮説の本体」)。ポートを実装する adapter は、ポートが受け渡す domain の型を扱うため、domain を import する。
 - ポートを実装する adapter が domain を使うのは、型の受け渡しと、保管先の表現からの組み立てに限る。domain の規則(検証、判定)は、adapter から呼ばない。この区別は、import の検査では検出できないため、規約とし、レビューで確かめる。
