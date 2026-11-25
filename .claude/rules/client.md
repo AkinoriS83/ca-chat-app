@@ -9,14 +9,14 @@ paths:
 
 ## 層と、置くもの
 
-| 層 | 置き場所 | 置くもの | import してよい先 |
-|---|---|---|---|
-| application | `src/application`、`src/application/port` | クライアントの振る舞いと状態(`chatApp.ts`)、型(`model.ts`)、ポート | application の中だけ。テストのファイルは、Vitest も |
-| adapter | `src/adapter` | ポートの実装。通信の形式(生成した型)と、application の型の間の変換(`wire.ts`) | `src/application/port/` と、`src/application/model.ts`(型だけの import)。adapter の中 |
-| ui | `src/ui` | React の部品。application の状態を表示し、利用者の操作を application に伝える | application(`port/` を除く)。React。ui の中 |
-| main | `src/main.tsx` | 組み立てと、起動 | すべて(生成した型を除く) |
+| 層 | 置き場所 | 置くもの |
+|---|---|---|
+| application | `src/application`、`src/application/port` | クライアントの振る舞いと状態(`chatApp.ts`)、型(`model.ts`)、ポート |
+| adapter | `src/adapter` | ポートの実装。通信の形式(生成した型)と、application の型の間の変換(`wire.ts`) |
+| ui | `src/ui` | React の部品。application の状態を表示し、利用者の操作を application に伝える |
+| main | `src/main.tsx` | 組み立てと、起動 |
 
-設定は、`client/.dependency-cruiser.cjs`(型だけの import も、対象にする)と、`client/eslint.deps.config.js` です。列挙にない置き場所は、違反です。
+置き場所ごとの「import してよい先」は、アーキテクチャ概要「置き場所と、import してよい先」の表と、設定(`client/.dependency-cruiser.cjs`。型だけの import も、対象にする。`client/eslint.deps.config.js`)にあります(本書には、写しません)。列挙にない置き場所は、違反です。
 
 置き場所は、次の順に考えます。
 
@@ -55,4 +55,5 @@ paths:
 1. `client/.dependency-cruiser.cjs` に、規則を加える(`unlisted-location` からの除外を含む)。application に関わる場合は、`client/eslint.deps.config.js` も確かめる。
 2. 規則に違反する見本を、その層の `__depcheck__/` に加える(名前は、`.depcruise.ts` か `.eslint.ts` で終える)。`make check-deps-selftest` で、検出されることを確かめる。
 3. アーキテクチャ概要の、ディレクトリと、「置き場所と、import してよい先」の表を更新する。
-4. 観察記録に、追記する。
+4. 本書のうち、置き場所とファイルの名前を挙げている箇所(層の表、規約、テストの置き場所)を直す。
+5. 観察記録に、追記する。
