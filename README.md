@@ -59,7 +59,6 @@ make db-migrate
 - `make setup` は、E2Eテスト用のブラウザ(Chromium)も取得します。Chromium が要する OS のライブラリが端末にない場合、E2Eテストは、ブラウザを起動できずに失敗します(`error while loading shared libraries` と出ます)。その場合は、次のどちらかを行います。
   - ライブラリを導入する: `cd client && sudo npx playwright install-deps chromium`。Playwright が取得した Chromium を使うため、ブラウザの版は、`@playwright/test` の版で決まります。
   - 端末に導入済みの Chromium を使う: `.env` に、`E2E_CHROMIUM_PATH=/snap/bin/chromium` のように、実行ファイルの場所を書きます(`sudo snap install chromium` で導入した場合)。この場合、ブラウザの版は、リポジトリでは固定されません。
-- メモリの少ない端末では、`make setup` の、Go の道具のビルド(sqlc、golangci-lint)が、メモリ不足で止まることがあります(`signal: killed` と出ます)。その場合は、`GOFLAGS=-p=1 GOGC=15 make tools` で、並列の数とメモリの使用を抑えて、ビルドします。
 
 道具と依存物の版は、リポジトリに記録して、固定しています(WS-32)。
 
@@ -168,7 +167,6 @@ cd server && ../scripts/with-env.sh go test -race -count=1 ./cmd/server/ -run Te
 
 - テストは、直列に実行します。テストごとに、始める前に、データを空の状態に戻します。
 - 失敗を調べるときは、`cd client && ../scripts/with-env.sh npx playwright test --trace on` で、トレースを記録します(既定では、記録しません)。
-- E2Eテストは、ブラウザ、開発用のサーバー、サーバーを同時に動かすため、メモリを使います。WSL2 に割り当てたメモリが 2GB のときは、他のプロセスの状況によって、時間切れで失敗することがありました。4GB にした後は、全体が約5秒で終わります(2026-11-21 に確かめた)。メモリが少ない場合は、エディタなど、他のプロセスを減らすか、`.wslconfig` の `memory` を増やしてください。
 
 ## 動作検証
 
