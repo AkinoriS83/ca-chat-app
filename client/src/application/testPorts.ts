@@ -1,7 +1,15 @@
-// テスト用の、ポートの実装。application のテストが使う。
-import type { FixedUser, Message } from './model'
-import type { ChatApi, HistoryResult, SendRequest, SendResult } from './port/chatApi'
-import type { FixedUserDirectory } from './port/fixedUserDirectory'
+// テスト用の、ポートの実装。application と ui のテストが使う。
+import type { Message, UserProfile } from './model'
+import type {
+  AuthApi,
+  CommandResult,
+  CompleteSignupRequest,
+  LoginResult,
+  SessionCheck,
+  SessionInfo,
+} from './port/authApi'
+import type { ChatApi, FindPeerResult, HistoryResult, SendRequest, SendResult } from './port/chatApi'
+import type { EntryLink } from './port/entryLink'
 import type {
   DeliveredMessage,
   RealtimeChannel,
@@ -18,25 +26,60 @@ export type Pending<Request, Result> = {
   reject(reason: unknown): void
 }
 
+function pend<Request, Result>(calls: Pending<Request, Result>[], request: Request): Promise<Result> {
+  return new Promise((resolve, reject) => {
+    calls.push({ request, resolve, reject })
+  })
+}
+
+export class FakeAuthApi implements AuthApi {
+  readonly sessionCalls: Pending<null, SessionCheck>[] = []
+  readonly loginCalls: Pending<{ contact: string; secret: string }, LoginResult>[] = []
+  readonly logoutCalls: Pending<{ sessionId: string }, CommandResult>[] = []
+  readonly signupCalls: Pending<{ contact: string }, CommandResult>[] = []
+  readonly completeCalls: Pending<CompleteSignupRequest, CommandResult>[] = []
+
+  currentSession(): Promise<SessionCheck> {
+    return pend(this.sessionCalls, null)
+  }
+
+  login(contact: string, secret: string): Promise<LoginResult> {
+    return pend(this.loginCalls, { contact, secret })
+  }
+
+  logout(sessionId: string): Promise<CommandResult> {
+    return pend(this.logoutCalls, { sessionId })
+  }
+
+  requestSignup(contact: string): Promise<CommandResult> {
+    return pend(this.signupCalls, { contact })
+  }
+
+  completeSignup(request: CompleteSignupRequest): Promise<CommandResult> {
+    return pend(this.completeCalls, request)
+  }
+}
+
 export class FakeChatApi implements ChatApi {
-  readonly historyCalls: Pending<{ actor: string; peer: string }, HistoryResult>[] = []
+  readonly peerCalls: Pending<{ sessionId: string; handle: string }, FindPeerResult>[] = []
+  readonly historyCalls: Pending<{ sessionId: string; peer: string }, HistoryResult>[] = []
   readonly sendCalls: Pending<SendRequest, SendResult>[] = []
 
-  listMessages(actor: string, peer: string): Promise<HistoryResult> {
-    return new Promise((resolve, reject) => {
-      this.historyCalls.push({ request: { actor, peer }, resolve, reject })
-    })
+  findPeer(sessionId: string, handle: string): Promise<FindPeerResult> {
+    return pend(this.peerCalls, { sessionId, handle })
+  }
+
+  listMessages(sessionId: string, peer: string): Promise<HistoryResult> {
+    return pend(this.historyCalls, { sessionId, peer })
   }
 
   sendMessage(request: SendRequest): Promise<SendResult> {
-    return new Promise((resolve, reject) => {
-      this.sendCalls.push({ request, resolve, reject })
-    })
+    return pend(this.sendCalls, request)
   }
 }
 
 export type FakeConnection = {
-  actor: string
+  sessionId: string
   listener: RealtimeListener
   closed: boolean
 }
@@ -44,8 +87,8 @@ export type FakeConnection = {
 export class FakeRealtimeChannel implements RealtimeChannel {
   readonly connections: FakeConnection[] = []
 
-  connect(actor: string, listener: RealtimeListener): RealtimeConnection {
-    const connection: FakeConnection = { actor, listener, closed: false }
+  connect(sessionId: string, listener: RealtimeListener): RealtimeConnection {
+    const connection: FakeConnection = { sessionId, listener, closed: false }
     this.connections.push(connection)
     return {
       close: () => {
@@ -61,6 +104,23 @@ export class FakeRealtimeChannel implements RealtimeChannel {
       throw new Error('接続が、確立されていない')
     }
     return connection
+  }
+}
+
+/** 案内の資格を、テストから与える。読み取ると、除く。 */
+export class FakeEntryLink implements EntryLink {
+  credential: string | null
+  taken = 0
+
+  constructor(credential: string | null = null) {
+    this.credential = credential
+  }
+
+  takeSignupCredential(): string | null {
+    this.taken++
+    const credential = this.credential
+    this.credential = null
+    return credential
   }
 }
 
@@ -101,17 +161,16 @@ export class FakeSendIdSource implements SendIdSource {
   }
 }
 
-export const alice: FixedUser = { handle: 'alice', displayName: 'Alice' }
-export const bob: FixedUser = { handle: 'bob', displayName: 'Bob' }
-export const carol: FixedUser = { handle: 'carol', displayName: 'Carol' }
+export const alice: UserProfile = { handle: 'alice', displayName: 'Alice' }
+export const bob: UserProfile = { handle: 'bob', displayName: 'Bob' }
+export const carol: UserProfile = { handle: 'carol', displayName: 'Carol' }
 
-export class FakeFixedUserDirectory implements FixedUserDirectory {
-  list(): FixedUser[] {
-    return [alice, bob, carol]
-  }
+/** テストの利用者の、ログイン状態。識別子は、利用者ごとに定まる。 */
+export function sessionOf(user: UserProfile): SessionInfo {
+  return { sessionId: `session-${user.handle}`, user }
 }
 
-export function message(seq: number, sender: FixedUser, body = `message ${seq}`): Message {
+export function message(seq: number, sender: UserProfile, body = `message ${seq}`): Message {
   return {
     seq,
     sender: { handle: sender.handle, displayName: sender.displayName },
@@ -120,7 +179,7 @@ export function message(seq: number, sender: FixedUser, body = `message ${seq}`)
   }
 }
 
-export function delivery(participants: [FixedUser, FixedUser], msg: Message, sendId = `other-${msg.seq}`): DeliveredMessage {
+export function delivery(participants: [UserProfile, UserProfile], msg: Message, sendId = `other-${msg.seq}`): DeliveredMessage {
   return { participants: participants.map((p) => p.handle).sort(), sendId, message: msg }
 }
 

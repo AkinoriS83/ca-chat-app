@@ -17,6 +17,6 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["vite/client", "node"]
   },
-  "include": ["src", "e2e", "*.ts"],
+  "include": ["src", "e2e", "tools", "*.ts"],
   "exclude": ["**/__depcheck__/**"]
 }

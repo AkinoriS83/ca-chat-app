@@ -31,7 +31,6 @@ func TestNonParticipant_CannotReadOrWriteConversation(t *testing.T) {
 			t.Fatalf("carol が、参加者でない会話のメッセージを得た: %+v", got)
 		}
 	}
-	// 自分以外の利用者を、操作を行う利用者として指定することは、仮のログインでは防がない(WS-P2)。
 	// 相手として、会話(2人の組)を指定する形はない。次は、いずれも、存在しない相手と同じ応答になる。
 	for _, peer := range []string{"alice,bob", "alice%2Fbob", "bob/messages/../../alice", "*"} {
 		resp := s.history("carol", peer)
@@ -62,8 +61,8 @@ func TestNonParticipant_CannotReadOrWriteConversation(t *testing.T) {
 	s.requireStored(3, 4)
 }
 
-// WS-41: 端末で、固定ユーザーを alice から carol へ選び直した後、その端末には、
-// alice が参加し carol が参加しない会話のメッセージが、届かない。
+// 端末が、alice としての接続を閉じ、carol として接続し直した後、その端末には、
+// alice が参加し carol が参加しない会話のメッセージが、届かない(WS-41 は、RL-20 が代わる。session_test.go)。
 func TestReconnectAsAnotherUser_ReceivesOnlyNewUsersMessages(t *testing.T) {
 	s := startServer(t)
 
@@ -83,7 +82,7 @@ func TestReconnectAsAnotherUser_ReceivesOnlyNewUsersMessages(t *testing.T) {
 	asCarol.requireNext(sentinel)
 }
 
-// 同じ固定ユーザーを、複数の端末で同時に選べる。端末の1つが閉じても、他の端末には届く。
+// 同じ利用者が、複数の端末を同時に開ける。端末の1つが閉じても、他の端末には届く。
 func TestDelivery_ContinuesAfterOneDeviceCloses(t *testing.T) {
 	s := startServer(t)
 	bob1 := s.connect("bob")

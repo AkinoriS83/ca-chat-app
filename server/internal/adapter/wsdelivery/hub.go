@@ -1,8 +1,12 @@
 // Package wsdelivery は、配信を行う adapter である。
-// port.MessageDelivery と port.ConnectionRegistry を実装する(ADR-005)。
+// port.MessageDelivery、port.ConnectionRegistry、port.SessionConnections を実装する(ADR-005、ADR-014)。
 //
-// 接続中の端末と、配信の宛先を保持する状態は、このパッケージだけが持つ(PERF-3、WS-35)。
-// domain の型を、通信の形式に変換し、接続への書き込み口に渡す。WebSocket のライブラリは、使わない。
+// 接続中の端末と、配信の宛先と、接続とログイン状態の対応を保持する状態は、このパッケージだけが持つ
+// (PERF-3、WS-35、RL-39)。domain の型を、通信の形式に変換し、接続への書き込み口に渡す。
+// WebSocket のライブラリは、使わない。
+//
+// ログイン状態が有効かどうかは、保持したログイン状態の ValidAt で判定する。期限を、自分では比べない。
+// ポートを実装する adapter が、domain の判定を呼ぶ例外である(ADR-020)。
 package wsdelivery
 
 import (
@@ -10,6 +14,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/AkinoriS83/ca-chat-app/server/internal/application/port"
 	"github.com/AkinoriS83/ca-chat-app/server/internal/domain"
@@ -20,38 +25,37 @@ import (
 type Hub struct {
 	logger *slog.Logger
 
-	mu     sync.Mutex
-	byUser map[domain.UserID]map[port.ConnectionSink]struct{}
-	owners map[port.ConnectionSink]domain.UserID
+	mu        sync.Mutex
+	sessions  map[port.ConnectionSink]domain.Session // 書き込み口ごとの、ログイン状態(利用者、識別子、期限)
+	byUser    map[domain.UserID]map[port.ConnectionSink]struct{}
+	bySession map[domain.SessionID]map[port.ConnectionSink]struct{}
 }
 
 // NewHub は、Hub を作る。
 func NewHub(logger *slog.Logger) *Hub {
 	return &Hub{
-		logger: logger,
-		byUser: map[domain.UserID]map[port.ConnectionSink]struct{}{},
-		owners: map[port.ConnectionSink]domain.UserID{},
+		logger:    logger,
+		sessions:  map[port.ConnectionSink]domain.Session{},
+		byUser:    map[domain.UserID]map[port.ConnectionSink]struct{}{},
+		bySession: map[domain.SessionID]map[port.ConnectionSink]struct{}{},
 	}
 }
 
 var (
 	_ port.MessageDelivery    = (*Hub)(nil)
 	_ port.ConnectionRegistry = (*Hub)(nil)
+	_ port.SessionConnections = (*Hub)(nil)
 )
 
-// Register は、接続を、利用者の端末として登録する。
-func (h *Hub) Register(_ context.Context, user domain.UserID, sink port.ConnectionSink) {
+// Register は、接続を、ログイン状態による、利用者の端末として登録する。
+func (h *Hub) Register(_ context.Context, session domain.Session, sink port.ConnectionSink) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	h.removeLocked(sink)
-	sinks, ok := h.byUser[user]
-	if !ok {
-		sinks = map[port.ConnectionSink]struct{}{}
-		h.byUser[user] = sinks
-	}
-	sinks[sink] = struct{}{}
-	h.owners[sink] = user
+	h.sessions[sink] = session
+	addTo(h.byUser, session.UserID, sink)
+	addTo(h.bySession, session.ID, sink)
 }
 
 // Unregister は、接続の登録を解く。登録されていない接続には、何もしない。
@@ -62,22 +66,66 @@ func (h *Hub) Unregister(_ context.Context, sink port.ConnectionSink) {
 	h.removeLocked(sink)
 }
 
+// CloseBySession は、そのログイン状態による接続のすべてに、ログイン状態が無効になったことを伝えて、
+// 閉じ、登録を解く。閉じた接続は、配信の宛先から外れる(RL-18)。
+func (h *Hub) CloseBySession(_ context.Context, id domain.SessionID) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for sink := range h.bySession[id] {
+		h.endLocked(sink)
+	}
+}
+
+// CloseExpired は、now の時点で、期限を過ぎたログイン状態による接続に、同じことを行う。
+func (h *Hub) CloseExpired(_ context.Context, now time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for sink, session := range h.sessions {
+		if !session.ValidAt(now) {
+			h.endLocked(sink)
+		}
+	}
+}
+
+// endLocked は、接続に、ログイン状態が無効になったことを伝えて、閉じ、登録を解く。
+func (h *Hub) endLocked(sink port.ConnectionSink) {
+	sink.CloseSessionEnded()
+	h.removeLocked(sink)
+}
+
 func (h *Hub) removeLocked(sink port.ConnectionSink) {
-	user, ok := h.owners[sink]
+	session, ok := h.sessions[sink]
 	if !ok {
 		return
 	}
-	delete(h.owners, sink)
-	delete(h.byUser[user], sink)
-	if len(h.byUser[user]) == 0 {
-		delete(h.byUser, user)
+	delete(h.sessions, sink)
+	removeFrom(h.byUser, session.UserID, sink)
+	removeFrom(h.bySession, session.ID, sink)
+}
+
+func addTo[K comparable](index map[K]map[port.ConnectionSink]struct{}, key K, sink port.ConnectionSink) {
+	sinks, ok := index[key]
+	if !ok {
+		sinks = map[port.ConnectionSink]struct{}{}
+		index[key] = sinks
+	}
+	sinks[sink] = struct{}{}
+}
+
+func removeFrom[K comparable](index map[K]map[port.ConnectionSink]struct{}, key K, sink port.ConnectionSink) {
+	delete(index[key], sink)
+	if len(index[key]) == 0 {
+		delete(index, key)
 	}
 }
 
 // Deliver は、メッセージを、participants がアプリを開いている端末のすべてに届ける。
 // 送信待ちの列に加えるまでを、呼び出しの中で終える。端末への書き込みは、待たない。
 // 列に加えられなかった端末の接続は、閉じる。登録は、受け付けの adapter が、接続の終わりとして解く。
-func (h *Hub) Deliver(_ context.Context, participants []domain.User, msg domain.Message) {
+// now の時点で、期限を過ぎたログイン状態による接続には、届けずに、閉じる(RL-18)。
+func (h *Hub) Deliver(_ context.Context, now time.Time, participants []domain.User, msg domain.Message) {
 	data, ok := encodeMessageEvent(participants, msg)
 	if !ok {
 		h.logger.Error("delivery skipped", "reason", "message_not_encodable")
@@ -90,6 +138,10 @@ func (h *Hub) Deliver(_ context.Context, participants []domain.User, msg domain.
 
 	for _, participant := range participants {
 		for sink := range h.byUser[participant.ID] {
+			if !h.sessions[sink].ValidAt(now) {
+				h.endLocked(sink)
+				continue
+			}
 			if !sink.Send(data) {
 				sink.Close()
 			}
@@ -134,7 +186,7 @@ func toMessage(participants []domain.User, msg domain.Message) (openapi.Message,
 	}
 
 	// participants は、識別名の昇順とする。
-	handles := []string{participants[0].Handle, participants[1].Handle}
+	handles := []string{participants[0].Handle.String(), participants[1].Handle.String()}
 	if handles[0] > handles[1] {
 		handles[0], handles[1] = handles[1], handles[0]
 	}
@@ -142,7 +194,7 @@ func toMessage(participants []domain.User, msg domain.Message) (openapi.Message,
 	return openapi.Message{
 		Participants: handles,
 		Seq:          msg.Seq,
-		Sender:       openapi.UserProfile{Handle: sender.Handle, DisplayName: sender.DisplayName},
+		Sender:       openapi.UserProfile{Handle: sender.Handle.String(), DisplayName: sender.DisplayName.String()},
 		Body:         msg.Body.String(),
 		SentAt:       msg.SentAt.UTC(),
 	}, true

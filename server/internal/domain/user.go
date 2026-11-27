@@ -6,9 +6,9 @@ package domain
 // 識別名(Handle)とは、別の値である。保管するのは、識別子である。
 type UserID string
 
-// User は、利用者である。
+// User は、利用者である。連絡先と秘密は、持たない。他の利用者に見せるのは、識別名と表示名だけである(RL-27)。
 type User struct {
 	ID          UserID
-	Handle      string // 識別名
-	DisplayName string // 表示名
+	Handle      Handle      // 識別名
+	DisplayName DisplayName // 表示名
 }

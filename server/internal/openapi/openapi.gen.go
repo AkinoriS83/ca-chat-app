@@ -17,13 +17,18 @@ import (
 
 // Defines values for ErrorCode.
 const (
-	ForbiddenOrigin ErrorCode = "forbidden_origin"
-	Internal        ErrorCode = "internal"
-	InvalidBody     ErrorCode = "invalid_body"
-	InvalidInput    ErrorCode = "invalid_input"
-	InvalidPeer     ErrorCode = "invalid_peer"
-	NotFound        ErrorCode = "not_found"
-	Unauthenticated ErrorCode = "unauthenticated"
+	ForbiddenOrigin         ErrorCode = "forbidden_origin"
+	HandleTaken             ErrorCode = "handle_taken"
+	Internal                ErrorCode = "internal"
+	InvalidBody             ErrorCode = "invalid_body"
+	InvalidFields           ErrorCode = "invalid_fields"
+	InvalidInput            ErrorCode = "invalid_input"
+	InvalidPeer             ErrorCode = "invalid_peer"
+	InvalidSignupCredential ErrorCode = "invalid_signup_credential"
+	LoginFailed             ErrorCode = "login_failed"
+	NotFound                ErrorCode = "not_found"
+	RateLimited             ErrorCode = "rate_limited"
+	Unauthenticated         ErrorCode = "unauthenticated"
 )
 
 // Valid indicates whether the value is a known member of the ErrorCode enum.
@@ -31,17 +36,51 @@ func (e ErrorCode) Valid() bool {
 	switch e {
 	case ForbiddenOrigin:
 		return true
+	case HandleTaken:
+		return true
 	case Internal:
 		return true
 	case InvalidBody:
+		return true
+	case InvalidFields:
 		return true
 	case InvalidInput:
 		return true
 	case InvalidPeer:
 		return true
+	case InvalidSignupCredential:
+		return true
+	case LoginFailed:
+		return true
 	case NotFound:
 		return true
+	case RateLimited:
+		return true
 	case Unauthenticated:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InputField.
+const (
+	Contact     InputField = "contact"
+	DisplayName InputField = "displayName"
+	Handle      InputField = "handle"
+	Secret      InputField = "secret"
+)
+
+// Valid indicates whether the value is a known member of the InputField enum.
+func (e InputField) Valid() bool {
+	switch e {
+	case Contact:
+		return true
+	case DisplayName:
+		return true
+	case Handle:
+		return true
+	case Secret:
 		return true
 	default:
 		return false
@@ -78,6 +117,21 @@ func (e ReadyEventType) Valid() bool {
 	}
 }
 
+// CompleteSignupRequest defines model for CompleteSignupRequest.
+type CompleteSignupRequest struct {
+	// DisplayName 表示名。値の検証は、サーバーの内側の層が行う
+	DisplayName string `json:"displayName"`
+
+	// Handle 識別名。値の検証は、サーバーの内側の層が行う
+	Handle string `json:"handle"`
+
+	// Secret 認証に用いる秘密。値の検証は、サーバーの内側の層が行う
+	Secret string `json:"secret"`
+
+	// SignupCredential 案内に含まれる、確認のための資格
+	SignupCredential string `json:"signupCredential"`
+}
+
 // ErrorCode 拒否とエラーの種類
 type ErrorCode string
 
@@ -85,6 +139,21 @@ type ErrorCode string
 type ErrorResponse struct {
 	// Code 拒否とエラーの種類
 	Code ErrorCode `json:"code"`
+
+	// Fields 正しくない項目のすべて。`code` が `invalid_fields` の場合だけ
+	Fields *[]InputField `json:"fields,omitempty"`
+}
+
+// InputField 入力の項目
+type InputField string
+
+// LoginRequest defines model for LoginRequest.
+type LoginRequest struct {
+	// Contact 連絡先
+	Contact string `json:"contact"`
+
+	// Secret 認証に用いる秘密
+	Secret string `json:"secret"`
 }
 
 // Message defines model for Message.
@@ -93,8 +162,10 @@ type Message struct {
 	Body string `json:"body"`
 
 	// Participants 会話の参加者2人の識別名。昇順
-	Participants []string    `json:"participants"`
-	Sender       UserProfile `json:"sender"`
+	Participants []string `json:"participants"`
+
+	// Sender 利用者。識別名と表示名だけを持つ。連絡先は、どの応答にも含めない
+	Sender UserProfile `json:"sender"`
 
 	// SentAt 送信の日時(保管した日時。UTC)
 	SentAt time.Time `json:"sentAt"`
@@ -148,7 +219,31 @@ type ServerEvent struct {
 	union json.RawMessage
 }
 
-// UserProfile defines model for UserProfile.
+// Session ログイン状態。資格は、含めない
+type Session struct {
+	// SessionId ログイン状態の識別子
+	SessionId string `json:"sessionId"`
+
+	// User 利用者。識別名と表示名だけを持つ。連絡先は、どの応答にも含めない
+	User UserProfile `json:"user"`
+}
+
+// SessionStatus defines model for SessionStatus.
+type SessionStatus struct {
+	// Authenticated ログインしているか
+	Authenticated bool `json:"authenticated"`
+
+	// Session ログイン状態。資格は、含めない
+	Session *Session `json:"session,omitempty"`
+}
+
+// SignupRequest defines model for SignupRequest.
+type SignupRequest struct {
+	// Contact 連絡先。値の検証は、サーバーの内側の層が行う
+	Contact string `json:"contact"`
+}
+
+// UserProfile 利用者。識別名と表示名だけを持つ。連絡先は、どの応答にも含めない
 type UserProfile struct {
 	// DisplayName 表示名
 	DisplayName string `json:"displayName"`
@@ -162,6 +257,15 @@ type Error = ErrorResponse
 
 // SendDirectMessageJSONRequestBody defines body for SendDirectMessage for application/json ContentType.
 type SendDirectMessageJSONRequestBody = SendMessageRequest
+
+// LoginJSONRequestBody defines body for Login for application/json ContentType.
+type LoginJSONRequestBody = LoginRequest
+
+// RequestSignupJSONRequestBody defines body for RequestSignup for application/json ContentType.
+type RequestSignupJSONRequestBody = SignupRequest
+
+// CompleteSignupJSONRequestBody defines body for CompleteSignup for application/json ContentType.
+type CompleteSignupJSONRequestBody = CompleteSignupRequest
 
 // AsReadyEvent returns the union data inside the ServerEvent as a ReadyEvent
 func (t ServerEvent) AsReadyEvent() (ReadyEvent, error) {
@@ -272,6 +376,24 @@ type ServerInterface interface {
 	// SendDirectMessage メッセージを送る
 	// (POST /api/direct-conversations/{peer}/messages)
 	SendDirectMessage(w http.ResponseWriter, r *http.Request, peer string)
+	// Logout ログアウトする
+	// (DELETE /api/session)
+	Logout(w http.ResponseWriter, r *http.Request)
+	// GetSession 現在のログイン状態を確かめる
+	// (GET /api/session)
+	GetSession(w http.ResponseWriter, r *http.Request)
+	// Login ログインする
+	// (POST /api/session)
+	Login(w http.ResponseWriter, r *http.Request)
+	// RequestSignup 登録を申し込む
+	// (POST /api/signups)
+	RequestSignup(w http.ResponseWriter, r *http.Request)
+	// CompleteSignup 登録を完了する
+	// (POST /api/users)
+	CompleteSignup(w http.ResponseWriter, r *http.Request)
+	// FindUser 相手を特定する
+	// (GET /api/users/{handle})
+	FindUser(w http.ResponseWriter, r *http.Request, handle string)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -326,6 +448,102 @@ func (siw *ServerInterfaceWrapper) SendDirectMessage(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SendDirectMessage(w, r, peer)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// Logout operation middleware
+func (siw *ServerInterfaceWrapper) Logout(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.Logout(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSession operation middleware
+func (siw *ServerInterfaceWrapper) GetSession(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// Login operation middleware
+func (siw *ServerInterfaceWrapper) Login(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.Login(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RequestSignup operation middleware
+func (siw *ServerInterfaceWrapper) RequestSignup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestSignup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CompleteSignup operation middleware
+func (siw *ServerInterfaceWrapper) CompleteSignup(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CompleteSignup(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// FindUser operation middleware
+func (siw *ServerInterfaceWrapper) FindUser(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "handle" -------------
+	var handle string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "handle", r.PathValue("handle"), &handle, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "handle", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FindUser(w, r, handle)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -455,6 +673,12 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/signups", wrapper.RequestSignup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/users", wrapper.CompleteSignup)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/users/{handle}", wrapper.FindUser)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/session", wrapper.Logout)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/session", wrapper.GetSession)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/session", wrapper.Login)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/direct-conversations/{peer}/messages", wrapper.ListDirectMessages)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/direct-conversations/{peer}/messages", wrapper.SendDirectMessage)
 

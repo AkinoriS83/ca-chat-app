@@ -15,6 +15,30 @@ const (
 	InvalidPeer
 	// NotFound は、見つからないことを示す。
 	NotFound
+	// InvalidFields は、入力の項目(連絡先、識別名、表示名、秘密)が、規則を満たさないことを示す。
+	InvalidFields
+	// RateLimited は、上限を超えたことを示す。
+	RateLimited
+	// InvalidSignupCredential は、確認のための資格が、無効であることを示す。理由は、区別しない。
+	InvalidSignupCredential
+	// HandleTaken は、識別名が、使われていることを示す。
+	HandleTaken
+	// LoginFailed は、ログインの照合に、失敗したことを示す。理由は、区別しない。
+	LoginFailed
+)
+
+// InputField は、入力の項目である。InvalidFields の拒否が、正しくない項目を挙げるために使う。
+type InputField int
+
+const (
+	// FieldContact は、連絡先である。
+	FieldContact InputField = iota + 1
+	// FieldHandle は、識別名である。
+	FieldHandle
+	// FieldDisplayName は、表示名である。
+	FieldDisplayName
+	// FieldSecret は、秘密である。
+	FieldSecret
 )
 
 func (r Rejection) String() string {
@@ -29,6 +53,16 @@ func (r Rejection) String() string {
 		return "invalid peer"
 	case NotFound:
 		return "not found"
+	case InvalidFields:
+		return "invalid fields"
+	case RateLimited:
+		return "rate limited"
+	case InvalidSignupCredential:
+		return "invalid signup credential"
+	case HandleTaken:
+		return "handle taken"
+	case LoginFailed:
+		return "login failed"
 	default:
 		return "unknown rejection"
 	}
@@ -36,8 +70,11 @@ func (r Rejection) String() string {
 
 // RejectedError は、ユースケースが操作を拒否したことを示す。
 // ユースケースは、拒否を *RejectedError で、完了できなかったことを、そのほかの error で返す。
+// 拒否には、秘密と資格を含めない(ADR-019)。
 type RejectedError struct {
 	Kind Rejection
+	// Fields は、正しくない項目のすべてである。InvalidFields の場合だけ。
+	Fields []InputField
 }
 
 func (e *RejectedError) Error() string {
@@ -46,4 +83,8 @@ func (e *RejectedError) Error() string {
 
 func rejected(kind Rejection) error {
 	return &RejectedError{Kind: kind}
+}
+
+func rejectedFields(fields ...InputField) error {
+	return &RejectedError{Kind: InvalidFields, Fields: fields}
 }

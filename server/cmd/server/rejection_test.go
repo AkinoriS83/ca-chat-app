@@ -53,12 +53,14 @@ func TestSend_Rejections(t *testing.T) {
 		{"送信の識別子にハイフンがない", "alice", "bob", "0b6f2d3e8a514c0e9f1d2a7c4e5b6d70", quoted("hello"), 400, "invalid_input"},
 		// 相手(WS-14、WS-15)
 		{"自分自身を相手とする", "alice", "alice", validID, quoted("hello"), 400, "invalid_peer"},
-		{"固定ユーザーの中に居ない相手", "alice", "dave", validID, quoted("hello"), 404, "not_found"},
-		{"相手の識別名の、大文字と小文字が違う", "alice", "Bob", validID, quoted("hello"), 404, "not_found"},
+		{"登録を完了した利用者の中に居ない相手", "alice", "dave", validID, quoted("hello"), 404, "not_found"},
+		{"自分自身(大文字と小文字を違えた)", "alice", "ALICE", validID, quoted("hello"), 400, "invalid_peer"},
+		{"相手の指定が、識別名の規則を満たさない(記号)", "alice", "bob!", validID, quoted("hello"), 404, "not_found"},
+		{"相手の指定が、識別名の規則を満たさない(短い)", "alice", "bo", validID, quoted("hello"), 404, "not_found"},
 		{"相手に、利用者の識別子を指定する", "alice", "00000000-0000-4000-8000-000000000001", validID, quoted("hello"), 404, "not_found"},
 		// 利用者(WS-16)
 		{"利用者を添えない", "", "bob", validID, quoted("hello"), 401, "unauthenticated"},
-		{"固定ユーザーでない利用者", "mallory", "bob", validID, quoted("hello"), 401, "unauthenticated"},
+		{"ログイン状態を添えない利用者", "mallory", "bob", validID, quoted("hello"), 401, "unauthenticated"},
 		{"利用者に、利用者の識別子を指定する", "00000000-0000-4000-8000-000000000003", "bob", validID, quoted("hello"), 401, "unauthenticated"},
 		// 複数の場合に当たる送信には、仕様の表の上にあるものの応答を返す。
 		{"利用者の確認は、本文の検証より先", "mallory", "dave", "x", quoted(""), 401, "unauthenticated"},
@@ -125,20 +127,19 @@ func TestHistory_Rejections(t *testing.T) {
 		t.Fatal("「見つからない」応答が、送信と履歴で一致しない")
 	}
 	// 定義されていないパスの応答とも、区別できない。
-	undefined := s.do(http.MethodGet, "/api/direct-conversations/dave", map[string]string{"X-Fixed-User": "alice"}, nil)
+	undefined := s.do(http.MethodGet, "/api/direct-conversations/dave", s.auth("alice"), nil)
 	if undefined.Status != historyNotFound.Status || string(undefined.Body) != string(historyNotFound.Body) {
 		t.Fatal("「見つからない」応答が、定義されていないパスの応答と一致しない")
 	}
 	s.requireStored(1, 1)
 }
 
-// 形式の検証は、利用者の確認より先に行う(api/openapi.yaml「拒否とエラーの応答」の順)。
-func TestSend_FormatIsCheckedBeforeUser(t *testing.T) {
+// RL-15: ログイン状態の確認は、形式の検証より先に行う(api/openapi.yaml「拒否とエラーの応答」の順)。
+func TestSend_SessionIsCheckedBeforeFormat(t *testing.T) {
 	s := startServer(t)
 
-	resp := s.sendRaw("", "bob", []byte(`{"sendId":"x"`))
-
-	requireError(t, resp, http.StatusBadRequest, "invalid_input")
+	requireError(t, s.sendRaw("", "bob", []byte(`{"sendId":"x"`)), http.StatusUnauthorized, "unauthenticated")
+	requireError(t, s.sendRaw("alice", "bob", []byte(`{"sendId":"x"`)), http.StatusBadRequest, "invalid_input")
 }
 
 // WS-18: 保管済みのメッセージと、送信者と送信の識別子がともに一致する送信に対して、完了を示す。

@@ -14,8 +14,11 @@ export type RealtimeListener = {
   /** 受信を開始できた(サーバーが、この接続を、配信の宛先として登録した)。 */
   onReady(): void
   onMessage(delivered: DeliveredMessage): void
-  /** 接続の確立に失敗した、または、接続が切れた。 */
-  onClosed(): void
+  /**
+   * 接続の確立に失敗した、または、接続が切れた。
+   * sessionEnded は、サーバーが、ログイン状態が無効になったことを示して、閉じたかを表す(ADR-014)。
+   */
+  onClosed(sessionEnded: boolean): void
 }
 
 export interface RealtimeConnection {
@@ -25,5 +28,6 @@ export interface RealtimeConnection {
 
 /** リアルタイムの接続。 */
 export interface RealtimeChannel {
-  connect(actor: string, listener: RealtimeListener): RealtimeConnection
+  /** sessionId は、ログイン状態の識別子である。資格は、ブラウザが付ける。 */
+  connect(sessionId: string, listener: RealtimeListener): RealtimeConnection
 }

@@ -1,5 +1,5 @@
-# ローカルの開発環境の保管先(ADR-004、ADR-007)。
-# 秘密は、同じ場所の .env で与える。与えられていなければ、起動に失敗する。
+# ローカルの開発環境の保管先(ADR-004、ADR-007)と、案内を受け取る手段(ADR-018)。
+# 秘密と、公開するポートの番号は、同じ場所の .env で与える。与えられていなければ、起動に失敗する。
 name: ca-chat-app
 
 services:
@@ -30,6 +30,22 @@ services:
       # TCP での接続を確かめる。初回の起動では、初期化のために、
       # TCP で待ち受けないサーバーが一時的に動くためである。
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # 案内を受け取る手段(ADR-018)。受け取ったメールを、外へ送らずに溜め、画面と API で読めるようにする。
+  # 中継(relay、forward)は、設定しない。新しい版の確認は、無効にする。
+  mailpit:
+    image: axllent/mailpit:v1.34.0
+    command:
+      - --disable-version-check
+    ports:
+      # 端末自身からの接続だけを受け付ける(RL-38)。画面と API は、認証を持たない。
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:?MAILPIT_SMTP_PORT を .env で与えてください}:1025"
+      - "127.0.0.1:${MAILPIT_UI_PORT:?MAILPIT_UI_PORT を .env で与えてください}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
       interval: 2s
       timeout: 3s
       retries: 30

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import { ChatApp, SEND_TIMEOUT_MS } from './chatApp'
-import type { Conversation } from './model'
+import type { ChatState, Conversation, FormError, SessionState } from './model'
+import type { LoginResult } from './port/authApi'
 import {
+  FakeAuthApi,
   FakeChatApi,
-  FakeFixedUserDirectory,
+  FakeEntryLink,
   FakeRealtimeChannel,
   FakeSendIdSource,
   FakeTimer,
@@ -13,22 +15,22 @@ import {
   carol,
   delivery,
   message,
+  sessionOf,
   settled,
 } from './testPorts'
 
 // テストの名前の C-1 などは、振る舞いの規則の番号である(chatApp.ts の先頭)。
 
-function setup() {
+const users = { alice, bob, carol }
+type Name = keyof typeof users
+
+function setup(signupCredential: string | null = null) {
+  const auth = new FakeAuthApi()
   const api = new FakeChatApi()
   const realtime = new FakeRealtimeChannel()
   const timer = new FakeTimer()
-  const app = new ChatApp({
-    api,
-    realtime,
-    timer,
-    sendIds: new FakeSendIdSource(),
-    users: new FakeFixedUserDirectory(),
-  })
+  const entry = new FakeEntryLink(signupCredential)
+  const app = new ChatApp({ auth, api, realtime, timer, sendIds: new FakeSendIdSource(), entry })
 
   const conversation = (): Conversation => {
     const current = app.getState().conversation
@@ -38,175 +40,696 @@ function setup() {
     return current
   }
   const seqs = (): number[] => conversation().messages.map((m) => m.seq)
+  const session = (): SessionState => app.getState().session
 
-  return { app, api, realtime, timer, conversation, seqs }
+  context = { app, auth, api, realtime, timer, entry, conversation, seqs, session }
+  return context
+}
+
+/** 最後に setup が作ったもの。下の補助が使う。 */
+let context: {
+  app: ChatApp
+  auth: FakeAuthApi
+  api: FakeChatApi
+  realtime: FakeRealtimeChannel
+  timer: FakeTimer
+  entry: FakeEntryLink
+  conversation: () => Conversation
+  seqs: () => number[]
+  session: () => SessionState
+}
+
+/** ログインしていない状態(ログインの画面)にする。 */
+async function signedOutAtLogin(): Promise<void> {
+  context.app.start()
+  context.auth.sessionCalls.at(-1)?.resolve({ kind: 'signedOut' })
+  await settled()
+}
+
+/** 利用者として、ログインした状態にする。ログイン中であれば、ログアウトしてから、ログインする。 */
+async function signIn(name: Name): Promise<void> {
+  const { app, auth } = context
+  if (app.getState().session.kind === 'checking') {
+    await signedOutAtLogin()
+  }
+  if (app.getState().session.kind === 'signedIn') {
+    app.logout()
+    auth.logoutCalls.at(-1)?.resolve({ kind: 'completed' })
+    await settled()
+  }
+  app.login(`${name}@example.com`, `${name}-secret`)
+  auth.loginCalls.at(-1)?.resolve({ kind: 'completed', session: sessionOf(users[name]) })
+  await settled()
+}
+
+/** 相手を特定して、会話を開く。 */
+async function openPeer(name: Name): Promise<void> {
+  const { app, api } = context
+  app.findPeer(name)
+  api.peerCalls.at(-1)?.resolve({ kind: 'found', peer: users[name] })
+  await settled()
+  app.openFoundPeer()
 }
 
 /** alice として、bob との会話を開き、履歴(空)を取得し終えた状態にする。 */
 async function setupOpenConversation() {
-  const context = setup()
-  context.app.selectUser('alice')
-  context.realtime.latest.listener.onReady()
-  context.app.openConversation('bob')
-  context.api.historyCalls[0]?.resolve({ kind: 'loaded', messages: [] })
+  const created = setup()
+  await signIn('alice')
+  created.realtime.latest.listener.onReady()
+  await openPeer('bob')
+  created.api.historyCalls[0]?.resolve({ kind: 'loaded', messages: [] })
   await settled()
-  return context
+  return created
 }
 
-describe('利用者の選択(C-1、WS-41)', () => {
-  it('最初は、利用者を選んでいない。選択肢は、固定ユーザーである', () => {
-    const { app, realtime } = setup()
+const signedOutLogin: ChatState = {
+  session: { kind: 'signedOut', screen: 'login', pending: false, error: null, notice: null },
+  peerSearch: { pending: false, found: null, error: null },
+  conversation: null,
+}
 
-    expect(app.getState()).toEqual({ users: [alice, bob, carol], currentUser: null, conversation: null })
+describe('アプリを開く(C-13、RL-21、RL-23)', () => {
+  it('最初は、ログイン状態を確かめている。ログインしているとも、していないとも、示さない', () => {
+    const { app, auth, realtime } = setup()
+
+    expect(app.getState().session).toEqual({ kind: 'checking' })
+    expect(auth.sessionCalls).toHaveLength(0)
+
+    app.start()
+
+    expect(app.getState().session).toEqual({ kind: 'checking' })
+    expect(auth.sessionCalls).toHaveLength(1)
     expect(realtime.connections).toHaveLength(0)
   })
 
-  it('selectUser は、選んだ利用者として、接続を確立する', () => {
-    const { app, realtime } = setup()
+  it('ログイン中であれば、利用者を示し、ログイン状態の識別子で、接続を確立する(再読み込みの後)', async () => {
+    const { app, auth, realtime, session } = setup()
 
-    app.selectUser('alice')
+    app.start()
+    auth.sessionCalls[0]?.resolve({ kind: 'signedIn', session: sessionOf(alice) })
+    await settled()
 
-    expect(app.getState().currentUser).toEqual(alice)
-    expect(realtime.connections.map((c) => c.actor)).toEqual(['alice'])
+    expect(session()).toEqual({ kind: 'signedIn', user: alice, logout: 'idle' })
+    expect(realtime.connections.map((c) => c.sessionId)).toEqual(['session-alice'])
   })
 
-  it('固定ユーザーでない識別名は、選べない', () => {
-    const { app, realtime } = setup()
+  it('ログインしていなければ、ログインの画面を示す。接続は、確立しない', async () => {
+    const { app, auth, realtime } = setup()
 
-    app.selectUser('mallory')
+    app.start()
+    auth.sessionCalls[0]?.resolve({ kind: 'signedOut' })
+    await settled()
 
-    expect(app.getState().currentUser).toBeNull()
+    expect(app.getState()).toEqual(signedOutLogin)
     expect(realtime.connections).toHaveLength(0)
   })
 
-  it('selectUser は、それまでの接続を閉じ、会話の状態を捨ててから、新しい利用者として接続する', async () => {
-    const { app, realtime, conversation } = await setupOpenConversation()
-    realtime.latest.listener.onMessage(delivery([alice, bob], message(1, bob)))
-    app.setDraft('書きかけ')
-    expect(conversation().messages).toHaveLength(1)
-    const asAlice = realtime.latest
+  it('確かめられなければ、そのことを示す。ログインしていないとは、示さない。やり直せる', async () => {
+    const { app, auth, session } = setup()
 
-    app.selectUser('carol')
+    app.start()
+    auth.sessionCalls[0]?.resolve({ kind: 'failed' })
+    await settled()
+    expect(session()).toEqual({ kind: 'unknown' })
 
-    expect(asAlice.closed).toBe(true)
-    expect(app.getState().currentUser).toEqual(carol)
-    expect(app.getState().conversation).toBeNull()
-    expect(realtime.connections.map((c) => c.actor)).toEqual(['alice', 'carol'])
+    app.start()
+    expect(session()).toEqual({ kind: 'checking' })
+    auth.sessionCalls[1]?.reject(new Error('network'))
+    await settled()
+    expect(session()).toEqual({ kind: 'unknown' })
+
+    app.start()
+    auth.sessionCalls[2]?.resolve({ kind: 'signedIn', session: sessionOf(alice) })
+    await settled()
+    expect(session()).toEqual({ kind: 'signedIn', user: alice, logout: 'idle' })
+  })
+
+  it('案内の資格があれば、ログイン状態を確かめずに、登録を続ける画面を示す', () => {
+    const { app, auth, entry, session } = setup('signup-credential')
+
+    app.start()
+
+    expect(session()).toEqual({ kind: 'signedOut', screen: 'signupComplete', pending: false, error: null, notice: null })
+    expect(auth.sessionCalls).toHaveLength(0)
+    // 資格は、アドレスから除かれている。状態には、現れない。
+    expect(entry.credential).toBeNull()
+    expect(JSON.stringify(app.getState())).not.toContain('signup-credential')
+  })
+
+  it('ログインの画面か、ログイン中に、start を呼んでも、何もしない', async () => {
+    const { app, auth, entry } = setup()
+    await signIn('alice')
+    const before = app.getState()
+
+    app.start()
+
+    expect(app.getState()).toBe(before)
+    expect(auth.sessionCalls).toHaveLength(1)
+    expect(entry.taken).toBe(1)
+  })
+})
+
+describe('ログイン(C-15、RL-12、RL-13)', () => {
+  it('完了で、利用者と識別子を保持し、接続を確立する。入力は、検証せずに、そのまま渡す', async () => {
+    const { app, auth, realtime, session } = setup()
+    await signedOutAtLogin()
+
+    app.login('  Alice@Example.com ', ' x ')
+
+    expect(session()).toMatchObject({ kind: 'signedOut', screen: 'login', pending: true, error: null })
+    expect(auth.loginCalls[0]?.request).toEqual({ contact: '  Alice@Example.com ', secret: ' x ' })
+
+    auth.loginCalls[0]?.resolve({ kind: 'completed', session: sessionOf(alice) })
+    await settled()
+
+    expect(session()).toEqual({ kind: 'signedIn', user: alice, logout: 'idle' })
+    expect(realtime.connections.map((c) => c.sessionId)).toEqual(['session-alice'])
+    // 秘密と、連絡先は、状態に保たない。
+    expect(JSON.stringify(app.getState())).not.toContain('Alice@Example.com')
+  })
+
+  const loginFailures: [string, LoginResult, FormError][] = [
+    ['照合の失敗', { kind: 'rejected', code: 'login_failed', fields: [] }, { code: 'login_failed', fields: [] }],
+    ['上限', { kind: 'rejected', code: 'rate_limited', fields: [] }, { code: 'rate_limited', fields: [] }],
+    ['完了できなかった', { kind: 'failed' }, { code: 'failed', fields: [] }],
+  ]
+  it.each(loginFailures)('%s では、理由を示し、ログインの画面に留まる', async (_name, result, error) => {
+    const { app, auth, realtime, session } = setup()
+    await signedOutAtLogin()
+
+    app.login('alice@example.com', 'wrong')
+    auth.loginCalls[0]?.resolve(result)
+    await settled()
+
+    expect(session()).toEqual({ kind: 'signedOut', screen: 'login', pending: false, error, notice: null })
+    expect(realtime.connections).toHaveLength(0)
+  })
+
+  it('要求が失敗した場合も、完了できなかったことを示す。やり直すと、理由は消える', async () => {
+    const { app, auth, session } = setup()
+    await signedOutAtLogin()
+
+    app.login('alice@example.com', 'secret')
+    auth.loginCalls[0]?.reject(new Error('network'))
+    await settled()
+    expect(session()).toMatchObject({ pending: false, error: { code: 'failed' } })
+
+    app.login('alice@example.com', 'secret')
+    expect(session()).toMatchObject({ pending: true, error: null })
+  })
+
+  it('結果を待っている間は、もう一度、送らない', async () => {
+    const { app, auth } = setup()
+    await signedOutAtLogin()
+
+    app.login('alice@example.com', 'secret')
+    app.login('alice@example.com', 'secret')
+
+    expect(auth.loginCalls).toHaveLength(1)
+  })
+
+  it('結果を待つ間は、画面を切り替えない。その間に完了したログインを、捨てない(C-19)', async () => {
+    const { app, auth, session } = setup()
+    await signedOutAtLogin()
+
+    app.login('alice@example.com', 'secret')
+    app.showSignupRequest()
+    expect(session()).toMatchObject({ screen: 'login', pending: true })
+
+    auth.loginCalls[0]?.resolve({ kind: 'completed', session: sessionOf(alice) })
+    await settled()
+    expect(session()).toEqual({ kind: 'signedIn', user: alice, logout: 'idle' })
+  })
+
+  it('ログインの画面を示していなければ、ログインしない', () => {
+    const { app, auth } = setup()
+
+    app.login('alice@example.com', 'secret')
+
+    expect(auth.loginCalls).toHaveLength(0)
+  })
+})
+
+describe('登録(C-17、RL-01、RL-05〜RL-07)', () => {
+  it('申し込みの完了で、案内を送ったことを示す', async () => {
+    const { app, auth, session } = setup()
+    await signedOutAtLogin()
+
+    app.showSignupRequest()
+    expect(session()).toEqual({ kind: 'signedOut', screen: 'signupRequest', pending: false, error: null, notice: null })
+
+    app.requestSignup('dave@example.com')
+    expect(session()).toMatchObject({ screen: 'signupRequest', pending: true })
+    expect(auth.signupCalls[0]?.request).toEqual({ contact: 'dave@example.com' })
+
+    auth.signupCalls[0]?.resolve({ kind: 'completed' })
+    await settled()
+
+    expect(session()).toEqual({
+      kind: 'signedOut',
+      screen: 'signupRequest',
+      pending: false,
+      error: null,
+      notice: 'signupRequested',
+    })
+  })
+
+  it('申し込みの拒否と、完了できなかった場合は、理由を示し、案内を送ったとは示さない(RL-10)', async () => {
+    const { app, auth, session } = setup()
+    await signedOutAtLogin()
+    app.showSignupRequest()
+
+    app.requestSignup('not-a-contact')
+    auth.signupCalls[0]?.resolve({ kind: 'rejected', code: 'invalid_fields', fields: ['contact'] })
+    await settled()
+    expect(session()).toMatchObject({ screen: 'signupRequest', error: { code: 'invalid_fields', fields: ['contact'] }, notice: null })
+
+    app.requestSignup('dave@example.com')
+    auth.signupCalls[1]?.resolve({ kind: 'failed' })
+    await settled()
+    expect(session()).toMatchObject({ screen: 'signupRequest', error: { code: 'failed', fields: [] }, notice: null })
+
+    app.requestSignup('dave@example.com')
+    auth.signupCalls[2]?.resolve({ kind: 'rejected', code: 'rate_limited', fields: [] })
+    await settled()
+    expect(session()).toMatchObject({ error: { code: 'rate_limited' }, notice: null })
+  })
+
+  it('登録の完了は、案内の資格とともに送る。完了で、資格を捨て、ログインの画面に、完了したことを示す', async () => {
+    const { app, auth, session } = setup('signup-credential')
+    app.start()
+
+    app.completeSignup('Dave_01', 'Dave', 'dave-secret')
+
+    expect(auth.completeCalls[0]?.request).toEqual({
+      credential: 'signup-credential',
+      handle: 'Dave_01',
+      displayName: 'Dave',
+      secret: 'dave-secret',
+    })
+    auth.completeCalls[0]?.resolve({ kind: 'completed' })
+    await settled()
+
+    expect(session()).toEqual({ kind: 'signedOut', screen: 'login', pending: false, error: null, notice: 'signupCompleted' })
+    // 資格は、捨てている。もう一度は、送らない。
+    app.completeSignup('Dave_01', 'Dave', 'dave-secret')
+    expect(auth.completeCalls).toHaveLength(1)
+  })
+
+  it('登録の完了の拒否では、理由と、正しくない項目を示し、同じ画面に留まる。同じ資格で、やり直せる', async () => {
+    const { app, auth, session } = setup('signup-credential')
+    app.start()
+
+    app.completeSignup('!', '', 'x')
+    auth.completeCalls[0]?.resolve({ kind: 'rejected', code: 'invalid_fields', fields: ['handle', 'displayName', 'secret'] })
+    await settled()
+    expect(session()).toEqual({
+      kind: 'signedOut',
+      screen: 'signupComplete',
+      pending: false,
+      error: { code: 'invalid_fields', fields: ['handle', 'displayName', 'secret'] },
+      notice: null,
+    })
+
+    app.completeSignup('alice', 'Dave', 'dave-secret')
+    auth.completeCalls[1]?.resolve({ kind: 'rejected', code: 'handle_taken', fields: [] })
+    await settled()
+    expect(session()).toMatchObject({ screen: 'signupComplete', error: { code: 'handle_taken' } })
+
+    app.completeSignup('Dave_01', 'Dave', 'dave-secret')
+    expect(auth.completeCalls[2]?.request.credential).toBe('signup-credential')
+  })
+
+  it('資格が無効である拒否でも、同じ画面に留まり、理由を示す(申し込み直しを求める)', async () => {
+    const { app, auth, session } = setup('signup-credential')
+    app.start()
+
+    app.completeSignup('Dave_01', 'Dave', 'dave-secret')
+    auth.completeCalls[0]?.resolve({ kind: 'rejected', code: 'invalid_signup_credential', fields: [] })
+    await settled()
+
+    expect(session()).toMatchObject({ screen: 'signupComplete', pending: false, error: { code: 'invalid_signup_credential' } })
+
+    // 申し込み直しの画面へ移ると、資格を捨てる。
+    app.showSignupRequest()
+    expect(session()).toMatchObject({ screen: 'signupRequest', error: null })
+    app.completeSignup('Dave_01', 'Dave', 'dave-secret')
+    expect(auth.completeCalls).toHaveLength(1)
+  })
+
+  it('申し込みの結果を待つ間は、画面を切り替えない。結果は、捨てずに示す(C-19)', async () => {
+    const { app, auth, session } = setup()
+    await signedOutAtLogin()
+    app.showSignupRequest()
+    app.requestSignup('dave@example.com')
+
+    app.showLogin()
+    expect(session()).toMatchObject({ screen: 'signupRequest', pending: true })
+
+    auth.signupCalls[0]?.resolve({ kind: 'completed' })
+    await settled()
+    expect(session()).toMatchObject({ screen: 'signupRequest', pending: false, notice: 'signupRequested' })
+
+    // 結果を受けた後は、切り替えられる。
+    app.showLogin()
+    expect(session()).toEqual({ kind: 'signedOut', screen: 'login', pending: false, error: null, notice: null })
+  })
+
+  it('登録の完了の結果を待つ間は、画面を切り替えず、案内の資格も捨てない(C-19)', async () => {
+    const { app, auth, session } = setup('signup-credential')
+    app.start()
+    app.completeSignup('Dave_01', 'Dave', 'dave-secret')
+
+    app.showLogin()
+    app.showSignupRequest()
+    expect(session()).toMatchObject({ screen: 'signupComplete', pending: true })
+
+    // 拒否の後、同じ資格で、やり直せる。
+    auth.completeCalls[0]?.resolve({ kind: 'rejected', code: 'handle_taken', fields: [] })
+    await settled()
+    app.completeSignup('Dave_02', 'Dave', 'dave-secret')
+    expect(auth.completeCalls[1]?.request.credential).toBe('signup-credential')
+
+    // 完了は、切り替えを試みた後でも、ログインの画面に、完了したこととして示す。
+    app.showSignupRequest()
+    auth.completeCalls[1]?.resolve({ kind: 'completed' })
+    await settled()
+    expect(session()).toEqual({ kind: 'signedOut', screen: 'login', pending: false, error: null, notice: 'signupCompleted' })
+  })
+
+  it('ログイン中は、画面を切り替えない', async () => {
+    const { app, session } = setup()
+    await signIn('alice')
+
+    app.showSignupRequest()
+    app.showLogin()
+
+    expect(session()).toMatchObject({ kind: 'signedIn' })
+  })
+})
+
+describe('ログアウト(C-16、RL-17、RL-22)', () => {
+  it('完了で、接続を閉じ、会話と、相手の特定の結果と、入力中の本文を捨てて、ログインの画面に切り替える(C-1)', async () => {
+    const { app, auth, realtime, session } = await setupOpenConversation()
+    app.setDraft('typing')
+
+    app.logout()
+
+    expect(session()).toEqual({ kind: 'signedIn', user: alice, logout: 'pending' })
+    expect(auth.logoutCalls[0]?.request).toEqual({ sessionId: 'session-alice' })
+    // 完了するまでは、ログアウトしたものとして、示さない。
+    expect(app.getState().conversation).not.toBeNull()
+
+    auth.logoutCalls[0]?.resolve({ kind: 'completed' })
+    await settled()
+
+    expect(app.getState()).toEqual(signedOutLogin)
+    expect(realtime.latest.closed).toBe(true)
+  })
+
+  it('完了できなかった場合は、できなかったことを示し、ログイン中のままとする(RL-22)', async () => {
+    const { app, auth, realtime, session, conversation } = await setupOpenConversation()
+    app.setDraft('typing')
+
+    app.logout()
+    auth.logoutCalls[0]?.resolve({ kind: 'failed' })
+    await settled()
+
+    expect(session()).toEqual({ kind: 'signedIn', user: alice, logout: 'failed' })
+    expect(conversation().draft).toBe('typing')
     expect(realtime.latest.closed).toBe(false)
+
+    // やり直せる。要求が失敗した場合も、同じである。
+    app.logout()
+    expect(session()).toMatchObject({ logout: 'pending' })
+    auth.logoutCalls[1]?.reject(new Error('network'))
+    await settled()
+    expect(session()).toMatchObject({ kind: 'signedIn', logout: 'failed' })
   })
 
-  it('leaveUser は、接続を閉じ、会話の状態を捨てて、利用者を選んでいない状態に戻す', async () => {
-    const { app, realtime, timer } = await setupOpenConversation()
+  it('認証の拒否では、ログインし直しが要ることを示して、ログインの画面に切り替える(C-14)', async () => {
+    const { app, auth, session } = await setupOpenConversation()
+
+    app.logout()
+    auth.logoutCalls[0]?.resolve({ kind: 'rejected', code: 'unauthenticated', fields: [] })
+    await settled()
+
+    expect(session()).toEqual({ kind: 'signedOut', screen: 'login', pending: false, error: null, notice: 'sessionEnded' })
+    expect(app.getState().conversation).toBeNull()
+  })
+
+  it('結果を待っている間は、もう一度、送らない。ログインしていなければ、何もしない', async () => {
+    const { app, auth } = setup()
+    app.logout()
+    expect(auth.logoutCalls).toHaveLength(0)
+
+    await signIn('alice')
+    app.logout()
+    app.logout()
+    expect(auth.logoutCalls).toHaveLength(1)
+  })
+})
+
+describe('ログイン状態が無効になった(C-1、C-14、RL-19、RL-20)', () => {
+  const ended: ChatState = {
+    session: { kind: 'signedOut', screen: 'login', pending: false, error: null, notice: 'sessionEnded' },
+    peerSearch: { pending: false, found: null, error: null },
+    conversation: null,
+  }
+
+  it('接続が、ログイン状態が無効になったことを示して閉じられると、操作なしに、ログインの画面に切り替える', async () => {
+    const { app, realtime, conversation } = await setupOpenConversation()
+    app.setDraft('typing')
+    expect(conversation().peer).toEqual(bob)
+
+    realtime.latest.listener.onClosed(true)
+
+    // 会話の内容、利用者の情報、入力中の本文を、示し続けない。
+    expect(app.getState()).toEqual(ended)
+    expect(realtime.latest.closed).toBe(true)
+  })
+
+  it('そのほかの理由で、接続が切れた場合は、ログイン中のままとする', async () => {
+    const { realtime, session, conversation } = await setupOpenConversation()
+
+    realtime.latest.listener.onClosed(false)
+
+    expect(session()).toMatchObject({ kind: 'signedIn' })
+    expect(conversation().peer).toEqual(bob)
+  })
+
+  it('履歴の取得が、認証の拒否を受けると、ログインの画面に切り替える', async () => {
+    const { app, api, realtime } = setup()
+    await signIn('alice')
+    realtime.latest.listener.onClosed(false)
+    await openPeer('bob')
+
+    api.historyCalls[0]?.resolve({ kind: 'rejected', code: 'unauthenticated' })
+    await settled()
+
+    expect(app.getState()).toEqual(ended)
+  })
+
+  it('送信が、認証の拒否を受けると、ログインの画面に切り替える。本文は、入力欄に戻さない', async () => {
+    const { app, api, timer } = await setupOpenConversation()
+    app.setDraft('typed while showing alice')
+    app.send()
+
+    api.sendCalls[0]?.resolve({ kind: 'rejected', code: 'unauthenticated' })
+    await settled()
+
+    expect(app.getState()).toEqual(ended)
+    expect(timer.pending).toBe(0)
+    // 識別子を捨てている。以後、送信しない。
+    app.setDraft('again')
+    app.send()
+    expect(api.sendCalls).toHaveLength(1)
+  })
+
+  it('相手の特定が、認証の拒否を受けると、ログインの画面に切り替える', async () => {
+    const { app, api } = await setupOpenConversation()
+
+    app.findPeer('carol')
+    api.peerCalls[1]?.resolve({ kind: 'rejected', code: 'unauthenticated' })
+    await settled()
+
+    expect(app.getState()).toEqual(ended)
+  })
+
+  it('切り替えた後に届いた、前のログイン状態の、接続、履歴の取得、送信、相手の特定の結果は、捨てる', async () => {
+    const { app, api, realtime, timer } = setup()
+    await signIn('alice')
+    const asAlice = realtime.latest
+    asAlice.listener.onReady()
+    await openPeer('bob')
+    app.findPeer('carol')
+    api.historyCalls[0]?.resolve({ kind: 'loaded', messages: [] })
+    await settled()
     app.setDraft('hello')
     app.send()
-    expect(timer.pending).toBe(1)
 
-    app.leaveUser()
-
-    expect(realtime.latest.closed).toBe(true)
-    expect(app.getState().currentUser).toBeNull()
-    expect(app.getState().conversation).toBeNull()
-    expect(timer.pending).toBe(0)
-  })
-
-  it('選び直した後、前の利用者の接続に届いた配信は、捨てる', async () => {
-    const { app, realtime, seqs } = await setupOpenConversation()
-    const asAlice = realtime.latest
-
-    app.selectUser('carol')
-    realtime.latest.listener.onReady()
-    app.openConversation('alice')
-    // 前の接続(alice)に、alice と bob の会話のメッセージと、alice と carol の会話のメッセージが届く。
+    asAlice.listener.onClosed(true)
     asAlice.listener.onMessage(delivery([alice, bob], message(1, bob)))
-    asAlice.listener.onMessage(delivery([alice, carol], message(1, alice)))
-
-    expect(seqs()).toEqual([])
-  })
-
-  it('選び直した後、前の利用者としての、履歴の取得と送信の結果は、捨てる', async () => {
-    const { app, api, realtime, conversation, seqs } = setup()
-    app.selectUser('alice')
-    realtime.latest.listener.onReady()
-    app.openConversation('bob')
-    const historyAsAlice = api.historyCalls[0]
-
-    app.selectUser('carol')
-    realtime.latest.listener.onReady()
-    app.openConversation('bob')
-    historyAsAlice?.resolve({ kind: 'loaded', messages: [message(1, alice, 'alice と bob の会話')] })
-    await settled()
-
-    expect(seqs()).toEqual([])
-    expect(conversation().history).toBe('loading')
-
-    // carol としての送信の後に、alice に選び直す。carol としての結果は、捨てる。
-    api.historyCalls[1]?.resolve({ kind: 'loaded', messages: [] })
-    await settled()
-    app.setDraft('carol から')
-    app.send()
-    const sendAsCarol = api.sendCalls[0]
-    app.selectUser('alice')
-    realtime.latest.listener.onReady()
-    app.openConversation('bob')
-    sendAsCarol?.resolve({ kind: 'completed', message: message(1, carol, 'carol から') })
-    await settled()
-
-    expect(seqs()).toEqual([])
-    expect(conversation().outgoing).toEqual([])
-  })
-
-  it('選び直した後、前の接続の ready と切断は、新しい接続の扱いを変えない', () => {
-    const { app, api, realtime } = setup()
-    app.selectUser('alice')
-    const asAlice = realtime.latest
-    app.selectUser('carol')
-    app.openConversation('alice')
-
     asAlice.listener.onReady()
-    asAlice.listener.onClosed()
+    asAlice.listener.onClosed(false)
+    api.peerCalls[1]?.resolve({ kind: 'found', peer: carol })
+    api.sendCalls[0]?.resolve({ kind: 'completed', message: message(2, alice, 'hello') })
+    timer.advance(SEND_TIMEOUT_MS)
+    await settled()
 
-    // carol としての接続は、まだ ready を受けていない。履歴は、取得しない。
+    expect(app.getState()).toEqual(ended)
+  })
+
+  it('別の利用者としてログインし直した後、前の利用者の会話を示さず、前の接続の配信を捨てる(RL-20)', async () => {
+    const { app, api, realtime, session, conversation, seqs } = await setupOpenConversation()
+    const asAlice = realtime.latest
+    asAlice.listener.onClosed(true)
+
+    await signIn('carol')
+
+    expect(session()).toEqual({ kind: 'signedIn', user: carol, logout: 'idle' })
+    expect(app.getState().conversation).toBeNull()
+    expect(realtime.connections.map((c) => c.sessionId)).toEqual(['session-alice', 'session-carol'])
+
+    await openPeer('bob')
+    asAlice.listener.onMessage(delivery([alice, bob], message(1, bob)))
+    realtime.latest.listener.onMessage(delivery([alice, bob], message(2, bob)))
+    expect(seqs()).toEqual([])
+    expect(conversation().peer).toEqual(bob)
+    // 操作には、新しいログイン状態の識別子を添える。
+    expect(api.peerCalls.at(-1)?.request.sessionId).toBe('session-carol')
+  })
+})
+
+describe('相手の特定(C-18、RL-24〜RL-26、RL-31)', () => {
+  it('結果(識別名と表示名)を示す。会話は、開かない。入力は、検証せずに、そのまま渡す', async () => {
+    const { app, api } = setup()
+    await signIn('alice')
+
+    app.findPeer(' BOB ')
+
+    expect(app.getState().peerSearch).toEqual({ pending: true, found: null, error: null })
+    expect(api.peerCalls[0]?.request).toEqual({ sessionId: 'session-alice', handle: ' BOB ' })
+
+    api.peerCalls[0]?.resolve({ kind: 'found', peer: bob })
+    await settled()
+
+    expect(app.getState().peerSearch).toEqual({ pending: false, found: bob, error: null })
+    expect(app.getState().conversation).toBeNull()
     expect(api.historyCalls).toHaveLength(0)
+  })
+
+  it.each([
+    ['見つからない', { kind: 'rejected', code: 'not_found' }, 'not_found'],
+    ['自分自身', { kind: 'rejected', code: 'invalid_peer' }, 'invalid_peer'],
+    ['入力が正しくない', { kind: 'rejected', code: 'invalid_input' }, 'invalid_input'],
+    ['上限', { kind: 'rejected', code: 'rate_limited' }, 'rate_limited'],
+    ['完了できなかった', { kind: 'failed' }, 'failed'],
+  ] as const)('%s 場合は、理由を示す', async (_name, result, error) => {
+    const { app, api } = setup()
+    await signIn('alice')
+
+    app.findPeer('someone')
+    api.peerCalls[0]?.resolve(result)
+    await settled()
+
+    expect(app.getState().peerSearch).toEqual({ pending: false, found: null, error })
+  })
+
+  it('要求が失敗した場合も、完了できなかったことを示す', async () => {
+    const { app, api } = setup()
+    await signIn('alice')
+
+    app.findPeer('bob')
+    api.peerCalls[0]?.reject(new Error('network'))
+    await settled()
+
+    expect(app.getState().peerSearch).toEqual({ pending: false, found: null, error: 'failed' })
+  })
+
+  it('特定し直すと、前の特定の結果は、捨てる', async () => {
+    const { app, api } = setup()
+    await signIn('alice')
+
+    app.findPeer('bob')
+    app.findPeer('carol')
+    api.peerCalls[0]?.resolve({ kind: 'found', peer: bob })
+    await settled()
+    expect(app.getState().peerSearch).toEqual({ pending: true, found: null, error: null })
+
+    api.peerCalls[1]?.resolve({ kind: 'found', peer: carol })
+    await settled()
+    expect(app.getState().peerSearch.found).toEqual(carol)
+  })
+
+  it('特定の拒否は、開いている会話を変えない', async () => {
+    const { app, api, conversation } = await setupOpenConversation()
+
+    app.findPeer('nobody')
+    api.peerCalls[1]?.resolve({ kind: 'rejected', code: 'not_found' })
+    await settled()
+    app.openFoundPeer()
+
+    expect(conversation().peer).toEqual(bob)
+    expect(api.historyCalls).toHaveLength(1)
+  })
+
+  it('履歴の取得が拒否された場合は、理由を示す。取得し直せる', async () => {
+    const { app, api, realtime, conversation } = setup()
+    await signIn('alice')
+    realtime.latest.listener.onReady()
+    await openPeer('bob')
+
+    api.historyCalls[0]?.resolve({ kind: 'rejected', code: 'rate_limited' })
+    await settled()
+    expect(conversation()).toMatchObject({ history: 'failed', historyRejection: 'rate_limited' })
+
+    app.retryHistory()
+    expect(conversation()).toMatchObject({ history: 'loading', historyRejection: null })
+    api.historyCalls[1]?.resolve({ kind: 'failed' })
+    await settled()
+    expect(conversation()).toMatchObject({ history: 'failed', historyRejection: null })
   })
 })
 
 describe('会話を開く(C-2、ADR-010)', () => {
-  it('利用者を選んでいなければ、開かない。自分自身と、固定ユーザーでない相手は、開かない', () => {
-    const { app, realtime } = setup()
+  it('ログインしていなければ、特定も、会話を開くことも、行わない。特定していなければ、開かない', async () => {
+    const { app, api } = setup()
 
-    app.openConversation('bob')
+    app.findPeer('bob')
+    app.openFoundPeer()
+    expect(api.peerCalls).toHaveLength(0)
     expect(app.getState().conversation).toBeNull()
 
-    app.selectUser('alice')
-    realtime.latest.listener.onReady()
-    app.openConversation('alice')
-    app.openConversation('mallory')
+    await signIn('alice')
+    app.openFoundPeer()
     expect(app.getState().conversation).toBeNull()
   })
 
-  it('ready を受けた後であれば、すぐに履歴を取得する', () => {
-    const { app, api, realtime, conversation } = setup()
-    app.selectUser('alice')
+  it('ready を受けた後であれば、すぐに履歴を取得する', async () => {
+    const { api, realtime, conversation } = setup()
+    await signIn('alice')
     realtime.latest.listener.onReady()
 
-    app.openConversation('bob')
+    await openPeer('bob')
 
     expect(conversation()).toEqual({
       peer: bob,
       history: 'loading',
+      historyRejection: null,
       messages: [],
       outgoing: [],
       draft: '',
       rejection: null,
     })
-    expect(api.historyCalls.map((c) => c.request)).toEqual([{ actor: 'alice', peer: 'bob' }])
+    expect(api.historyCalls.map((c) => c.request)).toEqual([{ sessionId: 'session-alice', peer: 'bob' }])
   })
 
-  it('接続を確立している途中であれば、ready を待ってから、履歴を取得する', () => {
-    const { app, api, realtime, conversation } = setup()
-    app.selectUser('alice')
+  it('接続を確立している途中であれば、ready を待ってから、履歴を取得する', async () => {
+    const { api, realtime, conversation } = setup()
+    await signIn('alice')
 
-    app.openConversation('bob')
+    await openPeer('bob')
 
     expect(conversation().history).toBe('loading')
     expect(api.historyCalls).toHaveLength(0)
@@ -216,32 +739,32 @@ describe('会話を開く(C-2、ADR-010)', () => {
     expect(api.historyCalls).toHaveLength(1)
   })
 
-  it('ready を待つ間に、接続の確立に失敗した場合は、その時点で取得する', () => {
-    const { app, api, realtime } = setup()
-    app.selectUser('alice')
-    app.openConversation('bob')
+  it('ready を待つ間に、接続の確立に失敗した場合は、その時点で取得する', async () => {
+    const { api, realtime } = setup()
+    await signIn('alice')
+    await openPeer('bob')
 
-    realtime.latest.listener.onClosed()
+    realtime.latest.listener.onClosed(false)
 
     expect(api.historyCalls).toHaveLength(1)
   })
 
-  it('接続が切れている場合は、待たずに取得する', () => {
-    const { app, api, realtime } = setup()
-    app.selectUser('alice')
+  it('接続が切れている場合は、待たずに取得する', async () => {
+    const { api, realtime } = setup()
+    await signIn('alice')
     realtime.latest.listener.onReady()
-    realtime.latest.listener.onClosed()
+    realtime.latest.listener.onClosed(false)
 
-    app.openConversation('bob')
+    await openPeer('bob')
 
     expect(api.historyCalls).toHaveLength(1)
   })
 
   it('履歴を取得すると、連番の順に示す(WS-20)。メッセージがなければ、空のままである(WS-21)', async () => {
-    const { app, api, realtime, conversation, seqs } = setup()
-    app.selectUser('alice')
+    const { api, realtime, conversation, seqs } = setup()
+    await signIn('alice')
     realtime.latest.listener.onReady()
-    app.openConversation('bob')
+    await openPeer('bob')
 
     api.historyCalls[0]?.resolve({ kind: 'loaded', messages: [message(1, alice), message(2, bob), message(3, alice)] })
     await settled()
@@ -249,7 +772,7 @@ describe('会話を開く(C-2、ADR-010)', () => {
     expect(conversation().history).toBe('loaded')
     expect(seqs()).toEqual([1, 2, 3])
 
-    app.openConversation('carol')
+    await openPeer('carol')
     api.historyCalls[1]?.resolve({ kind: 'loaded', messages: [] })
     await settled()
 
@@ -259,17 +782,17 @@ describe('会話を開く(C-2、ADR-010)', () => {
 
   it('履歴を取得できなかった場合は、failed にする', async () => {
     const first = setup()
-    first.app.selectUser('alice')
+    await signIn('alice')
     first.realtime.latest.listener.onReady()
-    first.app.openConversation('bob')
+    await openPeer('bob')
     first.api.historyCalls[0]?.resolve({ kind: 'failed' })
     await settled()
     expect(first.conversation().history).toBe('failed')
 
     const second = setup()
-    second.app.selectUser('alice')
+    await signIn('alice')
     second.realtime.latest.listener.onReady()
-    second.app.openConversation('bob')
+    await openPeer('bob')
     second.api.historyCalls[0]?.reject(new Error('network'))
     await settled()
     expect(second.conversation().history).toBe('failed')
@@ -295,22 +818,22 @@ describe('履歴と配信の統合(C-3、C-4、WS-22)', () => {
     expect(seqs()).toEqual([])
   })
 
-  it('会話を開いていないときの配信は、捨てる', () => {
+  it('会話を開いていないときの配信は、捨てる', async () => {
     const { app, realtime } = setup()
-    app.selectUser('alice')
+    await signIn('alice')
     realtime.latest.listener.onReady()
 
     realtime.latest.listener.onMessage(delivery([alice, bob], message(1, bob)))
-    app.openConversation('bob')
+    await openPeer('bob')
 
     expect(app.getState().conversation?.messages).toEqual([])
   })
 
   it('履歴の取得中に届いた配信を、すぐに加え、履歴と統合する。欠けず、重複しない', async () => {
-    const { app, api, realtime, seqs } = setup()
-    app.selectUser('alice')
+    const { api, realtime, seqs } = setup()
+    await signIn('alice')
     realtime.latest.listener.onReady()
-    app.openConversation('bob')
+    await openPeer('bob')
 
     // 履歴の読み取りと前後して、連番3と4が保管された。3は、履歴にも、配信にも現れる。
     realtime.latest.listener.onMessage(delivery([alice, bob], message(3, bob)))
@@ -324,10 +847,10 @@ describe('履歴と配信の統合(C-3、C-4、WS-22)', () => {
   })
 
   it('履歴の後に、同じメッセージが配信で届いても、重複しない', async () => {
-    const { app, api, realtime, seqs } = setup()
-    app.selectUser('alice')
+    const { api, realtime, seqs } = setup()
+    await signIn('alice')
     realtime.latest.listener.onReady()
-    app.openConversation('bob')
+    await openPeer('bob')
     api.historyCalls[0]?.resolve({ kind: 'loaded', messages: [message(1, alice), message(2, bob)] })
     await settled()
 
@@ -366,7 +889,7 @@ describe('送信(C-5)', () => {
 
     // クライアントは、本文を検証せず、整えない。入力の通りに送る。
     expect(api.sendCalls.map((c) => c.request)).toEqual([
-      { actor: 'alice', peer: 'bob', sendId: 'send-1', body: '  こんにちは\n' },
+      { sessionId: 'session-alice', peer: 'bob', sendId: 'send-1', body: '  こんにちは\n' },
     ])
     expect(conversation().outgoing).toEqual([{ sendId: 'send-1', body: '  こんにちは\n', status: 'sending' }])
     expect(conversation().draft).toBe('')
@@ -518,7 +1041,7 @@ describe('拒否(C-7、WS-40)', () => {
     app.setDraft('直した本文')
     app.send()
 
-    expect(api.sendCalls[1]?.request).toEqual({ actor: 'alice', peer: 'bob', sendId: 'send-2', body: '直した本文' })
+    expect(api.sendCalls[1]?.request).toEqual({ sessionId: 'session-alice', peer: 'bob', sendId: 'send-2', body: '直した本文' })
     expect(conversation().rejection).toBeNull()
     expect(conversation().draft).toBe('')
   })
@@ -563,7 +1086,7 @@ describe('送信できなかった場合(C-8、WS-17)', () => {
 
   it('リアルタイムの接続が切れていても、送信が届けば、完了する', async () => {
     const { app, api, realtime, conversation, seqs } = await setupOpenConversation()
-    realtime.latest.listener.onClosed()
+    realtime.latest.listener.onClosed(false)
     app.setDraft('hello')
     app.send()
 
@@ -590,8 +1113,8 @@ describe('送り直し(C-9、WS-17、WS-18)', () => {
     app.resend('send-1')
 
     expect(api.sendCalls.map((c) => c.request)).toEqual([
-      { actor: 'alice', peer: 'bob', sendId: 'send-1', body: '送り直す本文' },
-      { actor: 'alice', peer: 'bob', sendId: 'send-1', body: '送り直す本文' },
+      { sessionId: 'session-alice', peer: 'bob', sendId: 'send-1', body: '送り直す本文' },
+      { sessionId: 'session-alice', peer: 'bob', sendId: 'send-1', body: '送り直す本文' },
     ])
     expect(conversation().outgoing).toEqual([{ sendId: 'send-1', body: '送り直す本文', status: 'sending' }])
     expect(timer.pending).toBe(1)
@@ -735,11 +1258,12 @@ describe('別の会話を開く(C-11)', () => {
     app.send()
     app.setDraft('書きかけ')
 
-    app.openConversation('carol')
+    await openPeer('carol')
 
     expect(conversation()).toEqual({
       peer: carol,
       history: 'loading',
+      historyRejection: null,
       messages: [],
       outgoing: [],
       draft: '',
@@ -753,7 +1277,7 @@ describe('別の会話を開く(C-11)', () => {
     app.setDraft('bob へ')
     app.send()
 
-    app.openConversation('carol')
+    await openPeer('carol')
     api.sendCalls[0]?.resolve({ kind: 'completed', message: message(1, alice, 'bob へ') })
     realtime.latest.listener.onMessage(delivery([alice, bob], message(1, alice, 'bob へ'), 'send-1'))
     realtime.latest.listener.onMessage(delivery([alice, bob], message(2, bob)))
@@ -765,11 +1289,11 @@ describe('別の会話を開く(C-11)', () => {
   })
 
   it('前の会話の履歴の取得の結果は、捨てる', async () => {
-    const { app, api, realtime, conversation, seqs } = setup()
-    app.selectUser('alice')
+    const { api, realtime, conversation, seqs } = setup()
+    await signIn('alice')
     realtime.latest.listener.onReady()
-    app.openConversation('bob')
-    app.openConversation('carol')
+    await openPeer('bob')
+    await openPeer('carol')
 
     api.historyCalls[0]?.resolve({ kind: 'loaded', messages: [message(1, bob, 'bob との会話')] })
     await settled()
@@ -786,8 +1310,8 @@ describe('別の会話を開く(C-11)', () => {
     app.setDraft('完了の応答が届かない送信')
     app.send()
 
-    app.openConversation('carol')
-    app.openConversation('bob')
+    await openPeer('carol')
+    await openPeer('bob')
     // サーバーは、その送信を保管していた。
     api.historyCalls[2]?.resolve({ kind: 'loaded', messages: [message(1, alice, '完了の応答が届かない送信')] })
     await settled()
@@ -807,35 +1331,35 @@ describe('同じ相手を、もう一度指定する(C-12)', () => {
     app.setDraft('書きかけ')
     const before = conversation()
 
-    app.openConversation('bob')
+    await openPeer('bob')
 
     expect(conversation()).toBe(before)
     expect(api.historyCalls).toHaveLength(1)
   })
 
-  it('履歴の取得中は、何もしない', () => {
-    const { app, api, realtime } = setup()
-    app.selectUser('alice')
+  it('履歴の取得中は、何もしない', async () => {
+    const { api, realtime } = setup()
+    await signIn('alice')
     realtime.latest.listener.onReady()
-    app.openConversation('bob')
+    await openPeer('bob')
 
-    app.openConversation('bob')
+    await openPeer('bob')
 
     expect(api.historyCalls).toHaveLength(1)
   })
 
   it('履歴を取得できなかった場合は、会話の状態を保ったまま、取得し直す', async () => {
     const { app, api, realtime, conversation, seqs } = setup()
-    app.selectUser('alice')
+    await signIn('alice')
     realtime.latest.listener.onReady()
-    app.openConversation('bob')
+    await openPeer('bob')
     api.historyCalls[0]?.resolve({ kind: 'failed' })
     await settled()
     // 取得できなかった間にも、配信は届き、入力はできる。
     realtime.latest.listener.onMessage(delivery([alice, bob], message(3, bob)))
     app.setDraft('書きかけ')
 
-    app.openConversation('bob')
+    await openPeer('bob')
 
     expect(conversation().history).toBe('loading')
     expect(conversation().draft).toBe('書きかけ')
@@ -850,16 +1374,16 @@ describe('同じ相手を、もう一度指定する(C-12)', () => {
   })
 
   it('取得し直すときも、接続を確立している途中であれば、ready を待つ', async () => {
-    const { app, api, realtime, conversation } = setup()
-    app.selectUser('alice')
-    app.openConversation('bob')
-    realtime.latest.listener.onClosed()
+    const { api, realtime, conversation } = setup()
+    await signIn('alice')
+    await openPeer('bob')
+    realtime.latest.listener.onClosed(false)
     api.historyCalls[0]?.resolve({ kind: 'failed' })
     await settled()
     expect(conversation().history).toBe('failed')
 
     // 接続は、切れている。待たずに、取得し直す。
-    app.openConversation('bob')
+    await openPeer('bob')
 
     expect(api.historyCalls).toHaveLength(2)
   })
@@ -876,17 +1400,24 @@ describe('変化の通知', () => {
     const before = app.getState()
     expect(app.getState()).toBe(before)
 
-    app.selectUser('alice')
-    expect(notified).toBe(1)
+    await signIn('alice')
+    const afterSignIn = notified
+    expect(afterSignIn).toBeGreaterThan(0)
     expect(app.getState()).not.toBe(before)
 
     realtime.latest.listener.onReady()
-    app.openConversation('bob')
+    expect(notified).toBe(afterSignIn)
+    app.setDraft('会話を開いていなければ、変わらない')
+    expect(notified).toBe(afterSignIn)
+
+    await openPeer('bob')
+    const afterOpen = notified
     app.setDraft('hello')
-    expect(notified).toBe(3)
+    expect(notified).toBe(afterOpen + 1)
+    const last = notified
 
     unsubscribe()
     app.setDraft('bye')
-    expect(notified).toBe(3)
+    expect(notified).toBe(last)
   })
 })

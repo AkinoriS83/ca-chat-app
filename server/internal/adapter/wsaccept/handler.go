@@ -1,6 +1,6 @@
 // Package wsaccept は、WebSocket の接続を受け付ける adapter である。ユースケースを呼ぶ(ADR-005)。
 //
-// 接続を確立する要求を受け、ユースケースを呼んで、利用者を特定する。受信を開始できたことを、
+// 接続を確立する要求を受け、ユースケースを呼んで、ログイン状態を確かめる。受信を開始できたことを、
 // 端末に知らせる(ADR-010)。接続が終わったことを、ユースケースに伝える。
 // 配信の宛先を保持する状態は、持たない(配信の adapter が持つ)。
 package wsaccept
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -24,8 +25,16 @@ import (
 // Path は、WebSocket の接続先のパスである。
 const Path = "/api/realtime"
 
-// 仮実装(WS-P2): 仮のログイン。利用者を添える、クエリの名前。
-const fixedUserQuery = "user"
+// ログイン状態の添え方(ADR-014)。資格は、Cookie で、ログイン状態の識別子は、クエリで受ける。
+// Cookie の名前は、httpapi にも、同じ値の定数がある。2つの adapter は、互いに import できないためである。
+const (
+	sessionCookie = "chat_session"
+	sessionQuery  = "session"
+)
+
+// StatusSessionEnded は、ログイン状態が無効になった接続を閉じる、終了コードである。
+// アプリが使える範囲(4000〜4999)の値である。
+const StatusSessionEnded websocket.StatusCode = 4401
 
 // writeTimeout は、端末への、1通の書き込みの時間の上限である。
 const writeTimeout = 5 * time.Second
@@ -52,47 +61,50 @@ func NewHandler(keeper *usecase.ConnectionKeeper, appOrigin string, logger *slog
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// 1. WebSocket の接続を確立する要求でなければ、形式に合わない。
-	if !headerHasToken(r.Header, "Upgrade", "websocket") {
-		writeError(w, http.StatusBadRequest, openapi.InvalidInput)
-		return
-	}
-	// 仮実装(WS-P2): 仮のログイン。添えられた識別名を、そのまま使う。なりすましを防がない。
-	actor := r.URL.Query().Get(fixedUserQuery)
-
-	// 2. 書き込み口を作り、接続を確立する前に、ユースケースを呼ぶ。
-	//    利用者を特定できない要求は、接続を確立せずに拒否する(WS-16)。
+	// 1. 書き込み口を作り、接続を確立する前に、ユースケースを呼ぶ。
+	//    資格と、ログイン状態の識別子は、取り出して、そのまま渡す。確かめるのは、usecase である(ADR-019)。
+	//    WebSocket の接続を確立する要求でなければ、拒否せずに、印を付けて渡す。ログイン状態の確認を、
+	//    形式の確認より先に行うためである(RL-15)。
 	s := newSink()
-	if err := h.keeper.Accept(r.Context(), usecase.AcceptConnectionInput{Actor: actor, Connection: s}); err != nil {
+	err := h.keeper.Accept(r.Context(), usecase.AcceptConnectionInput{
+		Actor:      usecase.Actor{Credential: cookieValue(r, sessionCookie), SessionID: r.URL.Query().Get(sessionQuery)},
+		Source:     sourceOf(r),
+		Malformed:  !headerHasToken(r.Header, "Upgrade", "websocket"),
+		Connection: s,
+	})
+	if err != nil {
+		// ユースケースが返した拒否とエラーは、応答に置き換えるだけとする。記録は、usecase が行う(ADR-021)。
 		var rejected *usecase.RejectedError
-		if errors.As(err, &rejected) && rejected.Kind == usecase.Unauthenticated {
+		switch {
+		case errors.As(err, &rejected) && rejected.Kind == usecase.Unauthenticated:
 			writeError(w, http.StatusUnauthorized, openapi.Unauthenticated)
-			return
+		case errors.As(err, &rejected) && rejected.Kind == usecase.InvalidInput:
+			writeError(w, http.StatusBadRequest, openapi.InvalidInput)
+		default:
+			writeError(w, http.StatusInternalServerError, openapi.Internal)
 		}
-		h.logger.Error("operation failed", "operation", "accept connection", "error", err.Error())
-		writeError(w, http.StatusInternalServerError, openapi.Internal)
 		return
 	}
-	// 3. 以後、どの経路で終わる場合も、登録を解く。
+	// 2. 以後、どの経路で終わる場合も、登録を解く。
 	defer h.keeper.Close(context.WithoutCancel(r.Context()), usecase.CloseConnectionInput{Connection: s})
 
-	// 4. 接続を確立する。失敗した場合の応答は、ライブラリが書く。
+	// 3. 接続を確立する。失敗した場合の応答は、ライブラリが書く。
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{h.originHost}})
 	if err != nil {
 		return
 	}
 	defer func() { _ = conn.CloseNow() }()
 
-	// 5. 端末がデータのメッセージを送った場合と、接続が切れた場合に、ctx が取り消される。
+	// 4. 端末がデータのメッセージを送った場合と、接続が切れた場合に、ctx が取り消される。
 	//    端末からは、何も送らない取り決めである。送った場合、ライブラリが、接続を閉じる。
 	ctx := conn.CloseRead(r.Context())
 
-	// 6. 受信を開始できたことを知らせる。登録(手順2)の後であり、ADR-010 の順を満たす。
+	// 5. 受信を開始できたことを知らせる。登録(手順1)の後であり、ADR-010 の順を満たす。
 	if !h.write(ctx, conn, h.ready) {
 		return
 	}
 
-	// 7. 列から1通ずつ取り出して、書き込む。手順2から、ここまでの間に配信されたメッセージは、
+	// 6. 列から1通ずつ取り出して、書き込む。手順1から、ここまでの間に配信されたメッセージは、
 	//    列に溜まっており、ここで届く。
 	for {
 		select {
@@ -101,6 +113,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-s.closed:
+			if s.sessionEnded.Load() {
+				// ログイン状態が無効になった(ログアウト、ログインし直し、有効期限)。
+				h.logger.Info("connection closed", "reason", "session_ended")
+				_ = conn.Close(StatusSessionEnded, "")
+				return
+			}
 			// 送信待ちの列が一杯になり、配信の adapter が閉じた。
 			h.logger.Warn("connection closed", "reason", "send_queue_full")
 			_ = conn.Close(websocket.StatusPolicyViolation, "")
@@ -130,6 +148,25 @@ func (h *Handler) write(ctx context.Context, conn *websocket.Conn, data []byte) 
 		h.logger.Warn("connection closed", "reason", "write_failed")
 	}
 	return false
+}
+
+// cookieValue は、Cookie の値を返す。なければ、空の文字列を返す。
+func cookieValue(r *http.Request, name string) string {
+	c, err := r.Cookie(name)
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
+// sourceOf は、送信元(要求の接続の相手のアドレス)を返す。中継が付けるヘッダーは、読まない。
+// 同じ処理が、httpapi にもある。
+func sourceOf(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // headerHasToken は、ヘッダーの値(カンマ区切り)に、token が含まれるかを返す。大文字と小文字は、区別しない。

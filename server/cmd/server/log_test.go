@@ -50,7 +50,7 @@ func TestLogs_DoNotContainMessageBody(t *testing.T) {
 			t.Fatalf("ログに、本文か、保管先のエラーの詳細が含まれる:\n%s", logs)
 		}
 		// 完了できなかった操作は、操作の名前と、SQLSTATE とともに、記録されている。
-		for _, want := range []string{"operation failed", "send direct message", "append message", "23514"} {
+		for _, want := range []string{`"event":"operation_failed"`, `"operation":"send message"`, "append message", "23514"} {
 			if !strings.Contains(logs, want) {
 				t.Fatalf("ログに、%q がない:\n%s", want, logs)
 			}
@@ -69,22 +69,31 @@ func TestLogs_DoNotContainMessageBody(t *testing.T) {
 		if strings.Contains(logs, marker) {
 			t.Fatalf("ログに、本文が含まれる:\n%s", logs)
 		}
-		if !strings.Contains(logs, "operation failed") {
+		if !strings.Contains(logs, `"event":"operation_failed"`) {
 			t.Fatalf("完了できなかった操作が、記録されていない:\n%s", logs)
 		}
 	})
 }
 
-// 要求ごとの記録は、出力しない。完了した操作と、拒否は、ログに現れない。
+// 要求ごとの記録は、出力しない。出来事の記録(仕様「記録」)に当たらない、完了した操作と、拒否は、ログに現れない。
 func TestLogs_NoPerRequestRecords(t *testing.T) {
 	s := startServer(t)
 	bob := s.connect("bob")
+	s.as("alice")
+	// ここまでのログ(ログインの成功の記録)は、除く。
+	before := len(s.logs.String())
 
 	bob.requireNext(s.mustSend("alice", "bob", "hello"))
 	s.mustHistory("bob", "alice")
 	requireError(t, s.send("alice", "dave", newSendID(t), "hello"), http.StatusNotFound, "not_found")
 
-	if logs := s.logs.String(); logs != "" {
+	requireError(t, s.history("alice", "alice"), http.StatusBadRequest, "invalid_peer")
+	requireError(t, s.findUser(s.as("alice"), "dave"), http.StatusNotFound, "not_found")
+	if resp := s.getSession(""); resp.Status != http.StatusOK {
+		t.Fatalf("ログイン状態を確かめる操作が、完了しなかった: %d", resp.Status)
+	}
+
+	if logs := s.logs.String()[before:]; logs != "" {
 		t.Fatalf("完了した操作か、拒否が、ログに出力された:\n%s", logs)
 	}
 }

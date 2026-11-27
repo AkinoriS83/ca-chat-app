@@ -24,3 +24,24 @@ type Message struct {
 	Body           string
 	SentAt         time.Time
 }
+
+type Session struct {
+	ID               pgtype.UUID
+	CredentialDigest []byte
+	UserID           pgtype.UUID
+	ExpiresAt        time.Time
+}
+
+type Signup struct {
+	Contact          string
+	CredentialDigest []byte
+	ExpiresAt        time.Time
+}
+
+type User struct {
+	ID          pgtype.UUID
+	Contact     string
+	Handle      string
+	DisplayName string
+	SecretHash  string
+}

@@ -1,27 +1,37 @@
-import type { FixedUser } from '../application/model'
+import type { UserProfile } from '../application/model'
 
 type Props = {
-  user: FixedUser
-  onLeave: () => void
+  user: UserProfile
+  logout: 'idle' | 'pending' | 'failed'
+  onLogout: () => void
 }
 
 /**
- * 選んだ利用者の表示名と、利用者の選択に戻る操作。
- *
- * 仮実装(WS-P2): 仮のログイン。ログアウトの代わりに、利用者を選び直す。
+ * ログイン中の利用者の表示名と識別名、ログアウトの操作(UC-03)。
+ * ログアウトを完了できなかった場合は、できなかったことを示す。ログアウトしたものとしては、示さない(RL-22)。
  */
-export function Header({ user, onLeave }: Props) {
+export function Header({ user, logout, onLogout }: Props) {
   return (
     <header className="app-header">
       <p>
         <span className="current-user" data-testid="current-user">
           {user.displayName}
         </span>
-        {' として利用中'}
+        <span className="user-handle" data-testid="current-handle">
+          {`@${user.handle}`}
+        </span>
+        {' としてログイン中'}
       </p>
-      <button type="button" onClick={onLeave}>
-        利用者を選び直す
-      </button>
+      <div className="header-actions">
+        {logout === 'failed' && (
+          <p className="header-error" role="alert">
+            ログアウトできませんでした。ログインしたままです。もう一度、試してください。
+          </p>
+        )}
+        <button type="button" onClick={onLogout} disabled={logout === 'pending'}>
+          ログアウト
+        </button>
+      </div>
     </header>
   )
 }

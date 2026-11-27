@@ -1,6 +1,5 @@
 -- +goose Up
--- 仮実装(WS-P1): 利用者の表は、置かない。フェーズ1で、利用者の表と、
--- user_low、user_high、sender_id の外部キーを加える。
+-- 利用者の表は、00002 で加える。user_low、user_high、sender_id の外部キーは、00003 で加える。
 CREATE TABLE conversations (
     id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_low  uuid NOT NULL,

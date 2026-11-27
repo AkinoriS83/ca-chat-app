@@ -6,10 +6,18 @@ info:
     サーバーとクライアントの間の、通信の形式の定義です(ADR-003)。
     サーバーの型(oapi-codegen)と、クライアントの型(openapi-typescript)は、この文書から生成します。
 
-    ## 利用者の添え方
+    ## ログイン状態の添え方
 
-    仮実装(WS-P2): 仮のログイン。HTTP の操作には、固定ユーザーの識別名を、要求ヘッダー `X-Fixed-User` で添えます。
-    添えられていない要求と、固定ユーザーでない識別名を添えた要求は、`unauthenticated`(401)で拒否します。
+    認証の方式は、ADR-014 にあります。認証を要する操作には、次の2つを添えます。
+
+    - ログイン状態を示す資格。Cookie `chat_session` で添えます。ログインの応答が与え、ブラウザが保ち、要求に付けます。
+      資格は、応答の本文にも、接続先のアドレスにも、載せません。
+    - ログイン状態の識別子。HTTP の操作には、要求ヘッダー `X-Session-Id` で添えます。
+      ログインの応答(`Session`)と、「現在のログイン状態を確かめる」の応答が返します。秘密ではなく、これだけでは、操作できません。
+
+    資格に当たる、有効なログイン状態がない要求と、識別子が、そのログイン状態のものでない要求は、
+    理由を区別せずに、`unauthenticated`(401)で拒否します。
+    登録を申し込む、登録を完了する、ログインする、現在のログイン状態を確かめる、の4つは、認証を要しません。
 
     ## Host と Origin の検証
 
@@ -22,29 +30,165 @@ info:
 
     WebSocket は、OpenAPI の操作としては記述できないため、ここに記述します。
 
-    - 接続先は、`GET /api/realtime?user=<識別名>` です。仮実装(WS-P2): 利用者は、クエリ `user` で添えます。
+    - 接続先は、`GET /api/realtime?session=<ログイン状態の識別子>` です。資格は、Cookie で添えます。
     - 接続を確立する前の拒否(`forbidden_origin`、`unauthenticated`、`invalid_input`)は、
-      HTTP の応答として、`ErrorResponse` を返します。
+      HTTP の応答として、`ErrorResponse` を返します。順は、Host、Origin、ログイン状態、形式です。
     - サーバーは、接続を確立し、その接続を配信の宛先として登録した後、最初に `ReadyEvent` を1通届けます。
       クライアントは、これを受けた後に、履歴を取得します(ADR-010)。
     - 以後、サーバーは、接続した利用者が参加する会話のメッセージが保管されるたびに、`MessageEvent` を届けます。
       送信に使われた端末にも届けます(ADR-011)。
     - どちらも、テキストのメッセージ(JSON)です。形式は、`ServerEvent` です。
     - 端末からは、何も送りません。データのメッセージを受けた場合、サーバーは、接続を閉じます。
+    - サーバーは、ログイン状態が無効になった接続(ログアウト、同じブラウザでのログインし直し、有効期限)を、
+      終了コード 4401 で閉じます。送信待ちの列が一杯になった接続は、1008 で閉じます。
 
     ## 拒否とエラーの応答
 
-    拒否とエラーの応答は、どの操作でも、`ErrorResponse`(`code` だけ)です。
+    拒否とエラーの応答は、どの操作でも、`ErrorResponse` です。`code` を持ちます。
+    `invalid_fields` の場合だけ、正しくない項目のすべてを、`fields` に挙げます。文言と詳細は、含めません。
     1つの要求が複数の場合に当たるときは、次の順で、最初に当たったものを返します。
-    Host、Origin、形式、利用者、本文、送信の識別子の形式、自分自身、相手が居ない、別の会話との一致。
+
+    - どの操作でも、Host、Origin が先です。
+    - 認証を要する操作は、続いて、ログイン状態、形式、操作ごとの順です。
+    - 認証を要さない操作は、続いて、形式、操作ごとの順です。
+
+    操作ごとの順は、次の通りです。
+
+    - 登録を申し込む: 連絡先の規則、上限。
+    - 登録を完了する: 上限、資格が無効、入力の規則、識別名が使われている。
+    - ログインする: 上限、照合の失敗。
+    - 相手を特定する: 識別名の規則、自分自身、上限、居ない。
+    - 会話の履歴を読む: 自分自身、上限、相手が居ない。
+    - メッセージを送る: 本文、送信の識別子の形式、自分自身、上限、相手が居ない、別の会話との一致。
+
+    履歴と送信で、相手の指定が、識別名の規則を満たさない場合は、相手が居ない場合として扱います(`not_found`)。
 
 servers:
   - url: /
 
+# 認証を要する操作は、資格(Cookie)と、ログイン状態の識別子(要求ヘッダー)の、両方を要する。
 security:
-  - fixedUser: []
+  - sessionCookie: []
+    sessionId: []
 
 paths:
+  /api/signups:
+    post:
+      operationId: requestSignup
+      summary: 登録を申し込む
+      description: |
+        連絡先へ、確認のための案内を送ります。
+        完了の応答は、連絡先が登録済みかどうかに依らず、同じです。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignupRequest"
+      responses:
+        "204":
+          description: 申し込みを受け付け、案内を送った
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/users:
+    post:
+      operationId: completeSignup
+      summary: 登録を完了する
+      description: |
+        案内に含まれる、確認のための資格を確かめて、利用者を作ります。
+        確認のための資格は、要求の本文で送ります。ログイン状態は、与えません。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteSignupRequest"
+      responses:
+        "204":
+          description: 登録を完了した
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/users/{handle}:
+    parameters:
+      - name: handle
+        in: path
+        required: true
+        description: 相手の識別名。大文字と小文字を、区別しない
+        schema:
+          type: string
+    get:
+      operationId: findUser
+      summary: 相手を特定する
+      description: |
+        識別名が、大文字と小文字の違いを除いて、すべて一致する利用者を返します。
+        部分一致と、候補の提示は、行いません。利用者の一覧を取得する操作は、ありません。
+      responses:
+        "200":
+          description: 特定した相手。識別名は、相手が登録した通り
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        default:
+          $ref: "#/components/responses/Error"
+
+  /api/session:
+    post:
+      operationId: login
+      summary: ログインする
+      description: |
+        連絡先と秘密を照合し、新しいログイン状態を与えます。資格は、Cookie `chat_session` として与えます。
+        要求に付いた資格に当たるログイン状態があれば、無効にします。
+        照合の失敗は、理由を区別せずに、`login_failed`(401)で拒否します。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: 与えたログイン状態
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      operationId: getSession
+      summary: 現在のログイン状態を確かめる
+      description: |
+        Cookie の資格に当たる、ログイン中の利用者と、ログイン状態の識別子を返します。
+        ログイン状態の識別子は、要しません。状態を、変えません。
+        ログイン状態が有効でない場合は、拒否とせず、ログインしていないことを示します。理由は、区別しません。
+      security:
+        - {}
+        - sessionCookie: []
+      responses:
+        "200":
+          description: 現在のログイン状態
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionStatus"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: logout
+      summary: ログアウトする
+      description: ログイン状態を無効にし、Cookie を消します。そのログイン状態による接続を、閉じます。
+      responses:
+        "204":
+          description: ログアウトした
+        default:
+          $ref: "#/components/responses/Error"
+
   /api/direct-conversations/{peer}/messages:
     parameters:
       - name: peer
@@ -94,12 +238,16 @@ paths:
 
 components:
   securitySchemes:
-    # 仮実装(WS-P2): 仮のログイン。フェーズ1の認証で置き換える。
-    fixedUser:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: chat_session
+      description: ログイン状態を示す資格(ADR-014)
+    sessionId:
       type: apiKey
       in: header
-      name: X-Fixed-User
-      description: 固定ユーザーの識別名
+      name: X-Session-Id
+      description: ログイン状態の識別子(ADR-014)
 
   responses:
     Error:
@@ -112,6 +260,7 @@ components:
   schemas:
     UserProfile:
       type: object
+      description: 利用者。識別名と表示名だけを持つ。連絡先は、どの応答にも含めない
       required: [handle, displayName]
       properties:
         handle:
@@ -182,7 +331,21 @@ components:
         - invalid_body
         - invalid_peer
         - not_found
+        - invalid_fields
+        - rate_limited
+        - invalid_signup_credential
+        - handle_taken
+        - login_failed
         - internal
+
+    InputField:
+      type: string
+      description: 入力の項目
+      enum:
+        - contact
+        - handle
+        - displayName
+        - secret
 
     ErrorResponse:
       type: object
@@ -190,6 +353,68 @@ components:
       properties:
         code:
           $ref: "#/components/schemas/ErrorCode"
+        fields:
+          type: array
+          description: 正しくない項目のすべて。`code` が `invalid_fields` の場合だけ
+          items:
+            $ref: "#/components/schemas/InputField"
+
+    SignupRequest:
+      type: object
+      required: [contact]
+      properties:
+        contact:
+          type: string
+          description: 連絡先。値の検証は、サーバーの内側の層が行う
+
+    CompleteSignupRequest:
+      type: object
+      required: [signupCredential, handle, displayName, secret]
+      properties:
+        signupCredential:
+          type: string
+          description: 案内に含まれる、確認のための資格
+        handle:
+          type: string
+          description: 識別名。値の検証は、サーバーの内側の層が行う
+        displayName:
+          type: string
+          description: 表示名。値の検証は、サーバーの内側の層が行う
+        secret:
+          type: string
+          description: 認証に用いる秘密。値の検証は、サーバーの内側の層が行う
+
+    LoginRequest:
+      type: object
+      required: [contact, secret]
+      properties:
+        contact:
+          type: string
+          description: 連絡先
+        secret:
+          type: string
+          description: 認証に用いる秘密
+
+    Session:
+      type: object
+      description: ログイン状態。資格は、含めない
+      required: [sessionId, user]
+      properties:
+        sessionId:
+          type: string
+          description: ログイン状態の識別子
+        user:
+          $ref: "#/components/schemas/UserProfile"
+
+    SessionStatus:
+      type: object
+      required: [authenticated]
+      properties:
+        authenticated:
+          type: boolean
+          description: ログインしているか
+        session:
+          $ref: "#/components/schemas/Session"
 
     ReadyEvent:
       type: object

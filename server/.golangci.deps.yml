@@ -149,14 +149,70 @@ linters:
             - $gostd
             - github.com/jackc/pgx/v5
 
-        adapter-fixeduser:
+        # golang.org/x/crypto を import できるのは、このパッケージだけである(ADR-015)。
+        adapter-argon2id:
           list-mode: strict
           files:
-            - "**/internal/adapter/fixeduser/*.go"
+            - "**/internal/adapter/argon2id/*.go"
           allow:
             - $gostd
             - github.com/AkinoriS83/ca-chat-app/server/internal/application/port$
             - github.com/AkinoriS83/ca-chat-app/server/internal/domain$
+            - golang.org/x/crypto/argon2$
+
+        adapter-commonsecrets:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/commonsecrets/*.go"
+          allow:
+            - $gostd
+            - github.com/AkinoriS83/ca-chat-app/server/internal/application/port$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/domain$
+
+        adapter-smtpmail:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/smtpmail/*.go"
+          allow:
+            - $gostd
+            - github.com/AkinoriS83/ca-chat-app/server/internal/application/port$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/domain$
+
+        adapter-ratelimit:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/ratelimit/*.go"
+          allow:
+            - $gostd
+            - github.com/AkinoriS83/ca-chat-app/server/internal/application/port$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/domain$
+
+        adapter-system:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/system/*.go"
+          allow:
+            - $gostd
+            - github.com/AkinoriS83/ca-chat-app/server/internal/application/port$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/domain$
+
+        adapter-eventlog:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/eventlog/*.go"
+          allow:
+            - $gostd
+            - github.com/AkinoriS83/ca-chat-app/server/internal/application/port$
+            - github.com/AkinoriS83/ca-chat-app/server/internal/domain$
+
+        # ユースケースを呼ぶ adapter(相手は、時間の経過)。
+        adapter-schedule:
+          list-mode: strict
+          files:
+            - "**/internal/adapter/schedule/*.go"
+          allow:
+            - $gostd
+            - github.com/AkinoriS83/ca-chat-app/server/internal/application/usecase$
 
         # 生成した通信の形式の型: どの層も、import しない。
         openapi:
@@ -183,7 +239,13 @@ linters:
             - "!**/internal/adapter/postgres/*.go"
             - "!**/internal/adapter/postgres/sqlcgen/*.go"
             - "!**/internal/adapter/postgres/pgtest/*.go"
-            - "!**/internal/adapter/fixeduser/*.go"
+            - "!**/internal/adapter/argon2id/*.go"
+            - "!**/internal/adapter/commonsecrets/*.go"
+            - "!**/internal/adapter/smtpmail/*.go"
+            - "!**/internal/adapter/ratelimit/*.go"
+            - "!**/internal/adapter/system/*.go"
+            - "!**/internal/adapter/eventlog/*.go"
+            - "!**/internal/adapter/schedule/*.go"
             - "!**/internal/openapi/*.go"
           # depguard は、空の一覧を受け付けない。存在しないパッケージを、1つだけ挙げる。
           allow:

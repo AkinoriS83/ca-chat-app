@@ -13,10 +13,11 @@ import (
 
 func decodeRequest(body string) (sendID, decoded string, ok bool) {
 	r := httptest.NewRequest(http.MethodPost, "/api/direct-conversations/bob/messages", strings.NewReader(body))
-	return decodeSendMessageRequest(httptest.NewRecorder(), r)
+	fields, ok := decodeStringFields(httptest.NewRecorder(), r, maxRequestBodyBytes, "sendId", "body")
+	return fields["sendId"], fields["body"], ok
 }
 
-func TestDecodeSendMessageRequest_Valid(t *testing.T) {
+func TestDecodeStringFields_Valid(t *testing.T) {
 	tests := []struct {
 		name       string
 		body       string
@@ -44,7 +45,7 @@ func TestDecodeSendMessageRequest_Valid(t *testing.T) {
 }
 
 // 本文の中の、文字列として正しくない並びは、形式の誤りとして拒否せず、そのまま内側へ渡す。
-func TestDecodeSendMessageRequest_KeepsInvalidBodySequences(t *testing.T) {
+func TestDecodeStringFields_KeepsInvalidBodySequences(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
@@ -68,7 +69,7 @@ func TestDecodeSendMessageRequest_KeepsInvalidBodySequences(t *testing.T) {
 	}
 }
 
-func TestDecodeSendMessageRequest_Malformed(t *testing.T) {
+func TestDecodeStringFields_Malformed(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
@@ -100,7 +101,7 @@ func TestDecodeSendMessageRequest_Malformed(t *testing.T) {
 	}
 }
 
-func TestDecodeSendMessageRequest_SizeLimit(t *testing.T) {
+func TestDecodeStringFields_SizeLimit(t *testing.T) {
 	const overhead = len(`{"sendId":"abc","body":""}`)
 
 	atLimit := `{"sendId":"abc","body":"` + strings.Repeat("a", maxRequestBodyBytes-overhead) + `"}`
@@ -113,6 +114,46 @@ func TestDecodeSendMessageRequest_SizeLimit(t *testing.T) {
 
 	overLimit := `{"sendId":"abc","body":"` + strings.Repeat("a", maxRequestBodyBytes-overhead+1) + `"}`
 	if _, _, ok := decodeRequest(overLimit); ok {
+		t.Fatal("上限を超える要求を、形式に合うと判定した")
+	}
+}
+
+// 登録とログインの要求の文字列も、どの項目も、置き換えずに復号する(ADR-015)。大きさの上限は、16 KiB である。
+func TestDecodeStringFields_AccountRequests(t *testing.T) {
+	decode := func(body string) (map[string]string, bool) {
+		r := httptest.NewRequest(http.MethodPost, "/api/users", strings.NewReader(body))
+		return decodeStringFields(httptest.NewRecorder(), r, maxAccountBodyBytes, "signupCredential", "handle", "displayName", "secret")
+	}
+
+	fields, ok := decode(`{"signupCredential":"c","handle":"h","displayName":"d` + esc("d83d") + `","secret":"s` + "\xFF" + `"}`)
+	if !ok {
+		t.Fatal("形式に合わないと判定した")
+	}
+	if fields["signupCredential"] != "c" || fields["handle"] != "h" {
+		t.Fatalf("項目が違う: %q", fields)
+	}
+	for _, name := range []string{"displayName", "secret"} {
+		if utf8.ValidString(fields[name]) || strings.Contains(fields[name], "\xEF\xBF\xBD") {
+			t.Fatalf("%s が、置き換わった: %q", name, fields[name])
+		}
+	}
+
+	for _, body := range []string{
+		`{"signupCredential":"c","handle":"h","displayName":"d"}`,
+		`{"signupCredential":"c","handle":"h","displayName":"d","secret":null}`,
+		`{"signupCredential":"c","handle":1,"displayName":"d","secret":"s"}`,
+	} {
+		if _, ok := decode(body); ok {
+			t.Fatalf("形式に合うと判定した: %s", body)
+		}
+	}
+
+	const overhead = len(`{"signupCredential":"","handle":"h","displayName":"d","secret":"s"}`)
+	atLimit := `{"signupCredential":"` + strings.Repeat("a", maxAccountBodyBytes-overhead) + `","handle":"h","displayName":"d","secret":"s"}`
+	if _, ok := decode(atLimit); !ok || len(atLimit) != 16*1024 {
+		t.Fatalf("上限と同じ大きさの要求を、形式に合わないと判定した(%d バイト)", len(atLimit))
+	}
+	if _, ok := decode(strings.Replace(atLimit, `"handle":"h"`, `"handle":"hh"`, 1)); ok {
 		t.Fatal("上限を超える要求を、形式に合うと判定した")
 	}
 }

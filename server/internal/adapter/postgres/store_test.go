@@ -31,6 +31,22 @@ func newTestStore(t *testing.T) (*Store, *pgxpool.Pool) {
 	return NewStore(pool), pool
 }
 
+// newTestStoreWithUsers は、会話とメッセージのテストが使う利用者(userA、userB、userC)の行を、
+// 識別子を指定して、直接に置いた Store を返す。会話とメッセージは、利用者の表を参照する。
+func newTestStoreWithUsers(t *testing.T) (*Store, *pgxpool.Pool) {
+	t.Helper()
+	store, pool := newTestStore(t)
+	for i, id := range []domain.UserID{userA, userB, userC} {
+		name := "user" + string(rune('a'+i))
+		if _, err := pool.Exec(context.Background(),
+			"INSERT INTO users (id, contact, handle, display_name, secret_hash) VALUES ($1, $2, $3, $4, 'unused')",
+			string(id), name+"@example.com", name, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store, pool
+}
+
 // mustPair は、ポートに渡す、2人の組を作る。
 // adapter から domain の規則を呼ばない規約の、例外である(ADR-005)。DirectPair は、中の値を
 // パッケージの外から作れず、復元用の関数もないため、テストの入力の用意に限って、NewDirectPair を呼ぶ。
@@ -70,7 +86,7 @@ func countRows(t *testing.T, pool *pgxpool.Pool, table string) int {
 }
 
 func TestAppendAndList(t *testing.T) {
-	store, pool := newTestStore(t)
+	store, pool := newTestStoreWithUsers(t)
 	ctx := context.Background()
 	pair := mustPair(t, userA, userB)
 
@@ -126,7 +142,7 @@ func TestAppendAndList(t *testing.T) {
 }
 
 func TestListMessages_ReturnsOnlyThatConversation(t *testing.T) {
-	store, _ := newTestStore(t)
+	store, _ := newTestStoreWithUsers(t)
 	ctx := context.Background()
 
 	ab, err := appendOne(ctx, store, mustPair(t, userA, userB), userA, sendID1, "to b")
@@ -151,7 +167,7 @@ func TestListMessages_ReturnsOnlyThatConversation(t *testing.T) {
 }
 
 func TestAppendMessage_DuplicateSend(t *testing.T) {
-	store, pool := newTestStore(t)
+	store, pool := newTestStoreWithUsers(t)
 	ctx := context.Background()
 
 	first, err := appendOne(ctx, store, mustPair(t, userA, userB), userA, sendID1, "original")
@@ -194,7 +210,7 @@ func TestAppendMessage_DuplicateSend(t *testing.T) {
 // 端末が切断しても(要求の文脈が取り消されても)、確定し、結果を返す。
 // 取り消しに従うと、保管先では確定したのに、エラーを返すことがあり、そのメッセージは、配信されない。
 func TestInTransaction_CommitsEvenIfContextIsCanceledAfterOperations(t *testing.T) {
-	store, pool := newTestStore(t)
+	store, pool := newTestStoreWithUsers(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -221,7 +237,7 @@ func TestInTransaction_CommitsEvenIfContextIsCanceledAfterOperations(t *testing.
 
 // 取り消された文脈の下での操作は、失敗し、トランザクションは、取り消される。
 func TestInTransaction_RollsBackWhenOperationFailsByCanceledContext(t *testing.T) {
-	store, pool := newTestStore(t)
+	store, pool := newTestStoreWithUsers(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -244,7 +260,7 @@ func TestInTransaction_RollsBackWhenOperationFailsByCanceledContext(t *testing.T
 }
 
 func TestInTransaction_RollsBackOnError(t *testing.T) {
-	store, pool := newTestStore(t)
+	store, pool := newTestStoreWithUsers(t)
 	ctx := context.Background()
 	wantErr := errors.New("stop")
 
@@ -268,7 +284,7 @@ func TestInTransaction_RollsBackOnError(t *testing.T) {
 }
 
 func TestInTransaction_RollsBackOnPanic(t *testing.T) {
-	store, pool := newTestStore(t)
+	store, pool := newTestStoreWithUsers(t)
 	ctx := context.Background()
 
 	func() {
@@ -293,7 +309,7 @@ func TestInTransaction_RollsBackOnPanic(t *testing.T) {
 // 2人が、ほぼ同時に、最初のメッセージを含む複数通を送る。
 // 会話は1つで、連番に、欠番と重複がない(WS-05、WS-07)。
 func TestAppend_ConcurrentSendersShareOneGaplessSequence(t *testing.T) {
-	store, pool := newTestStore(t)
+	store, pool := newTestStoreWithUsers(t)
 	ctx := context.Background()
 
 	const perSender = 10
@@ -344,7 +360,7 @@ func TestAppend_ConcurrentSendersShareOneGaplessSequence(t *testing.T) {
 
 // 保管先が返したエラーを、そのまま返さない。文言と詳細に、行の内容(本文)が含まれることがある(WS-33)。
 func TestErrors_DoNotCarryRowContents(t *testing.T) {
-	store, pool := newTestStore(t)
+	store, pool := newTestStoreWithUsers(t)
 	ctx := context.Background()
 	const marker = "SECRET-BODY-MARKER"
 
@@ -385,7 +401,7 @@ func TestErrors_DoNotCarryRowContents(t *testing.T) {
 }
 
 func TestErrors_NonDatabaseFailure(t *testing.T) {
-	store, pool := newTestStore(t)
+	store, pool := newTestStoreWithUsers(t)
 	pool.Close()
 
 	_, _, err := store.FindDirect(context.Background(), mustPair(t, userA, userB))

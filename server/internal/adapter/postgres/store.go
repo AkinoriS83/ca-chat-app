@@ -1,5 +1,6 @@
 // Package postgres は、保管先(PostgreSQL)へ問い合わせる adapter である。
-// port.ConversationReader と port.Transactor を実装する(ADR-004、ADR-012)。
+// port.ConversationReader、port.Transactor と、利用者、ログイン状態、登録の申し込みのポートを実装する
+// (ADR-004、ADR-012、ADR-016)。
 //
 // domain を使うのは、型の受け渡しと、保管した値からの組み立てに限る。
 // domain の規則(NewBody、ParseSendID など)は、呼ばない(ADR-005。規約)。
@@ -94,6 +95,13 @@ const commitTimeout = 5 * time.Second
 // 保管先では確定したのに、エラーを返すことがある。呼び出した側は、完了できなかったものとして扱い、
 // 保管されたメッセージが、配信されない。代わりに、時間の上限を設ける。
 func (s *Store) InTransaction(ctx context.Context, fn func(ctx context.Context, w port.ConversationWriter) error) error {
+	return s.inTx(ctx, func(queries *sqlcgen.Queries) error {
+		return fn(ctx, &writer{queries: queries})
+	})
+}
+
+// inTx は、fn を、1つのトランザクションの中で実行する。InTransaction と InSignupTransaction が使う。
+func (s *Store) inTx(ctx context.Context, fn func(queries *sqlcgen.Queries) error) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return newOpError("begin transaction", err)
@@ -101,7 +109,7 @@ func (s *Store) InTransaction(ctx context.Context, fn func(ctx context.Context, 
 	// 確定した後の取り消しは、何もしない。fn がパニックした場合も、ここで取り消す。
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
-	if err := fn(ctx, &writer{queries: sqlcgen.New(tx)}); err != nil {
+	if err := fn(sqlcgen.New(tx)); err != nil {
 		return err
 	}
 	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commitTimeout)

@@ -34,8 +34,8 @@ class FakeWebSocket extends EventTarget {
     this.dispatchEvent(new MessageEvent('message', { data }))
   }
 
-  serverClose(): void {
-    this.dispatchEvent(new Event('close'))
+  serverClose(code = 1006): void {
+    this.dispatchEvent(new CloseEvent('close', { code }))
   }
 }
 
@@ -44,7 +44,7 @@ function recordingListener() {
   const listener: RealtimeListener = {
     onReady: () => events.push('ready'),
     onMessage: (delivered) => events.push(delivered),
-    onClosed: () => events.push('closed'),
+    onClosed: (sessionEnded) => events.push(sessionEnded ? 'session-ended' : 'closed'),
   }
   return { events, listener }
 }
@@ -64,9 +64,9 @@ describe('WebSocketRealtime', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket)
   })
 
-  function connect(actor = 'alice') {
+  function connect(sessionId = 'session-1') {
     const { events, listener } = recordingListener()
-    const connection = new WebSocketRealtime().connect(actor, listener)
+    const connection = new WebSocketRealtime().connect(sessionId, listener)
     const socket = FakeWebSocket.instances.at(-1)
     if (!socket) {
       throw new Error('WebSocket が、作られていない')
@@ -74,17 +74,17 @@ describe('WebSocketRealtime', () => {
     return { events, connection, socket }
   }
 
-  it('接続先を、表示中のページのオリジンから作り、利用者を、クエリで添える', () => {
-    const { socket } = connect('alice')
+  it('接続先を、表示中のページのオリジンから作り、ログイン状態の識別子を、クエリで添える', () => {
+    const { socket } = connect()
 
-    expect(socket.url).toBe(`ws://${location.host}/api/realtime?user=alice`)
+    expect(socket.url).toBe(`ws://${location.host}/api/realtime?session=session-1`)
     expect(location.host).not.toBe('')
   })
 
-  it('利用者の識別名を、クエリの値として符号化する', () => {
-    const { socket } = connect('a&user=b c')
+  it('ログイン状態の識別子を、クエリの値として符号化する', () => {
+    const { socket } = connect('a&session=b c')
 
-    expect(socket.url).toBe(`ws://${location.host}/api/realtime?user=a%26user%3Db%20c`)
+    expect(socket.url).toBe(`ws://${location.host}/api/realtime?session=a%26session%3Db%20c`)
   })
 
   it('ready と、メッセージの配信を、通知する', () => {
@@ -129,6 +129,23 @@ describe('WebSocketRealtime', () => {
     socket.serverClose()
 
     expect(events).toEqual(['ready', 'closed'])
+  })
+
+  it('終了コード 4401 で閉じられた場合は、ログイン状態が無効になったこととして、通知する(RL-19)', () => {
+    const { events, socket } = connect()
+    socket.receive(JSON.stringify({ type: 'ready' }))
+
+    socket.serverClose(4401)
+
+    expect(events).toEqual(['ready', 'session-ended'])
+  })
+
+  it('そのほかの終了コードは、ログイン状態が無効になったこととしては、通知しない', () => {
+    for (const code of [1000, 1006, 1008, 4400, 4402]) {
+      const { events, socket } = connect()
+      socket.serverClose(code)
+      expect(events).toEqual(['closed'])
+    }
   })
 
   it('接続の確立に失敗した場合も、切れたことを通知する', () => {

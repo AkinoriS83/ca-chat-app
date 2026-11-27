@@ -9,34 +9,66 @@ import (
 	"github.com/AkinoriS83/ca-chat-app/server/internal/adapter/wsaccept"
 	"github.com/AkinoriS83/ca-chat-app/server/internal/application/port"
 	"github.com/AkinoriS83/ca-chat-app/server/internal/application/usecase"
+	"github.com/AkinoriS83/ca-chat-app/server/internal/domain"
 )
 
 // ports は、組み立てに使う、ポートの実装である。
-// テストは、差し替えた実装を渡す(WS-31、WS-33)。
+// テストは、差し替えた実装を渡す(WS-31、WS-33、RL-10、RL-23)。
 type ports struct {
-	Users    port.UserDirectory
-	Reader   port.ConversationReader
-	Tx       port.Transactor
-	Delivery port.MessageDelivery
-	Registry port.ConnectionRegistry
+	Users         port.UserDirectory
+	Reader        port.ConversationReader
+	Tx            port.Transactor
+	Sessions      port.SessionStore
+	Signups       port.SignupStore
+	Delivery      port.MessageDelivery
+	Registry      port.ConnectionRegistry
+	Connections   port.SessionConnections
+	Credentials   port.CredentialSource
+	Hasher        port.SecretHasher
+	CommonSecrets port.CommonSecretList
+	Notices       port.NoticeSender
+	Limiter       port.AttemptLimiter
+	Clock         port.Clock
+	Events        port.EventRecorder
 }
 
-// newHandler は、ポートの実装と、ログの出力先を受け取って、サーバーの http.Handler を組み立てる。
+// assembled は、組み立てた結果である。
+type assembled struct {
+	// Handler は、サーバーの http.Handler である。
+	Handler http.Handler
+	// Housekeeper は、片付けのユースケースである。main は、一定の間隔で呼ぶ adapter に渡す。
+	// テストは、直接に呼ぶ。
+	Housekeeper *usecase.Housekeeper
+}
+
+// assemble は、ポートの実装、上限の値、ログの出力先を受け取って、ユースケースと、サーバーの http.Handler を組み立てる。
 //
 // main は、組み立てだけを行う。adapter には、そのパッケージが import してよい層のものだけを渡す(ADR-005)。
-// ユースケースを呼ぶ adapter(httpapi、wsaccept)には、ユースケースだけを渡し、ポートの実装を渡さない。
-func newHandler(p ports, appOrigin string, logger *slog.Logger) (http.Handler, error) {
-	sender := usecase.NewMessageSender(p.Users, p.Reader, p.Tx, p.Delivery)
-	history := usecase.NewHistoryReader(p.Users, p.Reader)
-	keeper := usecase.NewConnectionKeeper(p.Users, p.Registry)
+// ユースケースを呼ぶ adapter(httpapi、wsaccept、schedule)には、ユースケースだけを渡し、ポートの実装を渡さない。
+// logger は、接続への書き込みの失敗を出力する、接続の受け付けの adapter だけが受け取る(ADR-021)。
+func assemble(p ports, limits domain.LimitRules, appOrigin string, logger *slog.Logger) (assembled, error) {
+	// ログイン状態の確認は、1つにまとめ、認証を要するユースケースに渡す(ADR-019)。
+	gate := usecase.NewSessionGate(p.Sessions, p.Clock)
+
+	usecases := httpapi.Usecases{
+		SignupRequester: usecase.NewSignupRequester(p.Users, p.Signups, p.Credentials, p.Notices, p.Limiter, limits, p.Clock, p.Events),
+		SignupCompleter: usecase.NewSignupCompleter(p.Signups, p.CommonSecrets, p.Hasher, p.Tx, p.Limiter, limits, p.Clock, p.Events),
+		Authenticator:   usecase.NewAuthenticator(p.Users, p.Hasher, p.Sessions, p.Connections, p.Credentials, p.Limiter, limits, p.Clock, p.Events),
+		SessionKeeper:   usecase.NewSessionKeeper(gate, p.Sessions, p.Connections, p.Clock, p.Events),
+		PeerFinder:      usecase.NewPeerFinder(gate, p.Users, p.Reader, p.Limiter, limits, p.Clock, p.Events),
+		MessageSender:   usecase.NewMessageSender(gate, p.Users, p.Reader, p.Tx, p.Delivery, p.Limiter, limits, p.Clock, p.Events),
+		HistoryReader:   usecase.NewHistoryReader(gate, p.Users, p.Reader, p.Limiter, limits, p.Clock, p.Events),
+	}
+	keeper := usecase.NewConnectionKeeper(gate, p.Registry, p.Events)
+	housekeeper := usecase.NewHousekeeper(p.Connections, p.Sessions, p.Signups, p.Clock, p.Events)
 
 	realtime, err := wsaccept.NewHandler(keeper, appOrigin, logger)
 	if err != nil {
-		return nil, err
+		return assembled{}, err
 	}
 
 	mux := http.NewServeMux()
-	httpapi.NewHandler(sender, history, logger).Register(mux)
+	httpapi.NewHandler(usecases).Register(mux)
 	mux.Handle(http.MethodGet+" "+wsaccept.Path, realtime)
 	// 定義されていないパスと方法の、受け皿。
 	mux.Handle("/", httpapi.NotFoundHandler())
@@ -45,9 +77,10 @@ func newHandler(p ports, appOrigin string, logger *slog.Logger) (http.Handler, e
 	// 正規の形でないパスは、ServeMux より前で拒否する。
 	requireAppHost, err := httpapi.RequireAppHost(appOrigin)
 	if err != nil {
-		return nil, err
+		return assembled{}, err
 	}
-	return requireAppHost(httpapi.RequireAppOrigin(appOrigin)(httpapi.RequireCanonicalPath(mux))), nil
+	handler := requireAppHost(httpapi.RequireAppOrigin(appOrigin)(httpapi.RequireCanonicalPath(mux)))
+	return assembled{Handler: handler, Housekeeper: housekeeper}, nil
 }
 
 // newHTTPServer は、handler を使う http.Server を作る。

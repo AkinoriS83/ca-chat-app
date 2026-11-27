@@ -18,7 +18,9 @@ func TestOtherOrigin_IsRejected(t *testing.T) {
 	const evil = "https://evil.example"
 
 	headers := func(origin string) map[string]string {
-		return map[string]string{"Content-Type": "application/json", "X-Fixed-User": "alice", "Origin": origin}
+		h := s.auth("alice")
+		h["Origin"] = origin
+		return h
 	}
 	body := []byte(`{"sendId":"0b6f2d3e-8a51-4c0e-9f1d-2a7c4e5b6d70","body":"hello"}`)
 
@@ -50,7 +52,7 @@ func TestOtherOrigin_IsRejected(t *testing.T) {
 	preflight := s.do(http.MethodOptions, messagesPath("bob"), map[string]string{
 		"Origin":                         evil,
 		"Access-Control-Request-Method":  "POST",
-		"Access-Control-Request-Headers": "content-type,x-fixed-user",
+		"Access-Control-Request-Headers": "content-type,x-session-id",
 	}, nil)
 	requireError(t, preflight, http.StatusForbidden, "forbidden_origin")
 	requireNoCORS(t, preflight)
@@ -61,9 +63,14 @@ func TestOtherOrigin_IsRejected(t *testing.T) {
 		t.Fatalf("OPTIONS に、Allow を返した: %s", allow)
 	}
 
-	// 利用者も Origin もない GET(画像の読み込みなどの形で、第三者のサイトから送れる)は、
-	// 利用者を特定できないため、拒否される。
+	// Origin が付かない GET(画像の読み込みなどの形で、他のページから送れる)。
+	// 他のサイトのページからの要求には、SameSite=Strict によって、資格が付かない。
 	requireError(t, s.do(http.MethodGet, messagesPath("bob"), nil, nil), http.StatusUnauthorized, "unauthenticated")
+	// 同じサイトで、オリジンが異なるページ(localhost の別のポートなど)からの要求には、資格が付く。
+	// そのページは、ログイン状態の識別子を読めず、専用の要求ヘッダーも付けられないため、拒否される(ADR-014)。
+	cookieOnly := map[string]string{"Cookie": sessionCookieName + "=" + s.as("alice").Cookie}
+	requireError(t, s.do(http.MethodGet, messagesPath("bob"), cookieOnly, nil), http.StatusUnauthorized, "unauthenticated")
+	requireError(t, s.do(http.MethodGet, "/api/users/bob", cookieOnly, nil), http.StatusUnauthorized, "unauthenticated")
 }
 
 // WS-29: 第三者のサイトのページが、自分のホストの名前を、このサーバーのアドレスに向け直した場合
@@ -99,13 +106,13 @@ func TestOtherHost_IsRejected(t *testing.T) {
 
 	for _, host := range []string{"attacker.example:8080", "attacker.example", "localhost:8080", "127.0.0.1.attacker.example"} {
 		// 履歴の取得。同一オリジンの GET の形(Origin なし)。
-		history := doWithHost(http.MethodGet, host, map[string]string{"X-Fixed-User": "alice"}, nil)
+		history := doWithHost(http.MethodGet, host, s.auth("alice"), nil)
 		requireError(t, history, http.StatusForbidden, "forbidden_origin")
 		requireNoCORS(t, history)
 
 		// 送信。Origin がない場合も、Origin が、そのサイトのものである場合も、拒否する。
 		for _, origin := range []string{"", "http://" + host} {
-			header := map[string]string{"Content-Type": "application/json", "X-Fixed-User": "alice"}
+			header := s.auth("alice")
 			if origin != "" {
 				header["Origin"] = origin
 			}
@@ -129,7 +136,7 @@ func TestOtherHost_IsRejected(t *testing.T) {
 	s.requireStored(1, 1)
 
 	// アプリのオリジンのホスト(クライアントを配信するサーバーが、Host を書き換えずに中継する要求)は、通す。
-	viaApp := doWithHost(http.MethodGet, strings.TrimPrefix(testAppOrigin, "http://"), map[string]string{"X-Fixed-User": "alice"}, nil)
+	viaApp := doWithHost(http.MethodGet, strings.TrimPrefix(testAppOrigin, "http://"), s.auth("alice"), nil)
 	if viaApp.Status != http.StatusOK {
 		t.Fatalf("アプリのオリジンのホストに向けた履歴の取得が、完了しなかった: %d %s", viaApp.Status, viaApp.Body)
 	}
@@ -139,15 +146,16 @@ func TestOtherHost_IsRejected(t *testing.T) {
 func TestAppOrigin_IsAllowedWithoutCORSHeaders(t *testing.T) {
 	s := startServer(t)
 
-	send := s.do(http.MethodPost, messagesPath("bob"),
-		map[string]string{"Content-Type": "application/json", "X-Fixed-User": "alice", "Origin": testAppOrigin},
+	withOrigin := s.auth("alice")
+	withOrigin["Origin"] = testAppOrigin
+	send := s.do(http.MethodPost, messagesPath("bob"), withOrigin,
 		[]byte(`{"sendId":"0b6f2d3e-8a51-4c0e-9f1d-2a7c4e5b6d70","body":"hello"}`))
 	if send.Status != http.StatusOK {
 		t.Fatalf("アプリのオリジンからの送信が、完了しなかった: %d %s", send.Status, send.Body)
 	}
 	requireNoCORS(t, send)
 
-	history := s.do(http.MethodGet, messagesPath("bob"), map[string]string{"X-Fixed-User": "alice"}, nil)
+	history := s.do(http.MethodGet, messagesPath("bob"), s.auth("alice"), nil)
 	if history.Status != http.StatusOK {
 		t.Fatalf("Origin のない履歴の取得が、完了しなかった: %d", history.Status)
 	}
