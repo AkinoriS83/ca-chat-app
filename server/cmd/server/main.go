@@ -16,13 +16,20 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/AkinoriS83/ca-chat-app/server/internal/adapter/fixeduser"
+	"github.com/AkinoriS83/ca-chat-app/server/internal/adapter/argon2id"
+	"github.com/AkinoriS83/ca-chat-app/server/internal/adapter/commonsecrets"
+	"github.com/AkinoriS83/ca-chat-app/server/internal/adapter/eventlog"
 	"github.com/AkinoriS83/ca-chat-app/server/internal/adapter/postgres"
+	"github.com/AkinoriS83/ca-chat-app/server/internal/adapter/ratelimit"
+	"github.com/AkinoriS83/ca-chat-app/server/internal/adapter/schedule"
+	"github.com/AkinoriS83/ca-chat-app/server/internal/adapter/smtpmail"
+	"github.com/AkinoriS83/ca-chat-app/server/internal/adapter/system"
 	"github.com/AkinoriS83/ca-chat-app/server/internal/adapter/wsdelivery"
 )
 
 func main() {
 	// ログは、標準出力に出力する。要求の本文、メッセージの本文、保管先のエラーの文言は、出力しない(WS-33)。
+	// 秘密、資格、連絡先、識別名、表示名も、出力しない(RL-33)。
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	if err := run(logger); err != nil {
@@ -56,22 +63,35 @@ func run(logger *slog.Logger) error {
 
 	store := postgres.NewStore(pool)
 	hub := wsdelivery.NewHub(logger)
-	handler, err := newHandler(ports{
-		Users:    fixeduser.NewDirectory(), // 仮実装(WS-P1)
-		Reader:   store,
-		Tx:       store,
-		Delivery: hub,
-		Registry: hub,
-	}, cfg.AppOrigin, logger)
+	app, err := assemble(ports{
+		Users:         store,
+		Reader:        store,
+		Tx:            store,
+		Sessions:      store.Sessions(),
+		Signups:       store.Signups(),
+		Delivery:      hub,
+		Registry:      hub,
+		Connections:   hub,
+		Credentials:   system.CredentialSource{},
+		Hasher:        argon2id.NewHasher(),
+		CommonSecrets: commonsecrets.NewList(),
+		Notices:       smtpmail.NewSender(cfg.SMTPAddr, cfg.MailFrom, cfg.AppOrigin),
+		Limiter:       ratelimit.NewLimiter(),
+		Clock:         system.Clock{},
+		Events:        eventlog.NewRecorder(logger),
+	}, cfg.Limits, cfg.AppOrigin, logger)
 	if err != nil {
 		return err
 	}
+
+	// 片付けを、起動の直後と、以後、一定の間隔で行う。終了の合図で、止まる。
+	go schedule.NewRunner(app.Housekeeper).Run(ctx)
 
 	listener, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("%s で、待ち受けられません", cfg.ListenAddr)
 	}
-	server := newHTTPServer(cfg.ListenAddr, handler)
+	server := newHTTPServer(cfg.ListenAddr, app.Handler)
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()

@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'react'
 
-import type { Conversation, FixedUser } from '../application/model'
+import type { Conversation, UserProfile } from '../application/model'
 import { MessageItem, OutgoingItem } from './MessageItem'
+import { historyRejectionText } from './rejectionText'
 
 type Props = {
-  self: FixedUser
+  self: UserProfile
   conversation: Conversation
   onResend: (sendId: string) => void
   /** 履歴を、取得し直す。 */
@@ -13,9 +14,10 @@ type Props = {
 
 /**
  * 会話。メッセージを、連番の順に示す。その後ろに、送信中と、送信できなかったメッセージを示す。
+ * 相手は、表示名に、識別名を併せて示す(RL-D6)。
  */
 export function ConversationView({ self, conversation, onResend, onRetryHistory }: Props) {
-  const { peer, history, messages, outgoing } = conversation
+  const { peer, history, historyRejection, messages, outgoing } = conversation
   const listRef = useRef<HTMLDivElement>(null)
 
   // 新しいメッセージが加わったとき、会話の表示を、末尾まで送る。
@@ -31,11 +33,15 @@ export function ConversationView({ self, conversation, onResend, onRetryHistory 
 
   return (
     <section className="conversation" aria-label={`${peer.displayName} との会話`}>
+      <h2 className="conversation-peer" data-testid="conversation-peer">
+        <span>{peer.displayName}</span>
+        <span className="user-handle">{`@${peer.handle}`}</span>
+      </h2>
       <div className="conversation-scroll" ref={listRef}>
         {history === 'loading' && <p className="conversation-note">履歴を取得しています…</p>}
         {history === 'failed' && (
           <p className="conversation-note conversation-error" role="alert">
-            <span>履歴を取得できませんでした。</span>
+            <span>{historyRejection ? historyRejectionText(historyRejection) : '履歴を取得できませんでした。'}</span>
             <button type="button" onClick={onRetryHistory}>
               取得し直す
             </button>

@@ -6,27 +6,22 @@ import (
 )
 
 type historyFixture struct {
-	store  *fakeStore
+	*world
 	sender *MessageSender
 	reader *HistoryReader
 }
 
 func newHistoryFixture() *historyFixture {
-	users := newFakeUsers()
-	store := newFakeStore()
-	return &historyFixture{
-		store:  store,
-		sender: NewMessageSender(users, store, store, &fakeDelivery{store: store}),
-		reader: NewHistoryReader(users, store),
-	}
+	w := newWorld().loginAll()
+	return &historyFixture{world: w, sender: w.messageSender(), reader: w.historyReader()}
 }
 
 func TestRead_ReturnsMessagesInOrderWithSenders(t *testing.T) {
 	f := newHistoryFixture()
 	ctx := context.Background()
 	for _, in := range []SendMessageInput{
-		{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "one"},
-		{Actor: "bob", Peer: "alice", SendID: sendID2, Body: "two"},
+		{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "one"},
+		{Actor: as("bob"), Peer: "alice", SendID: sendID2, Body: "two"},
 	} {
 		if _, err := f.sender.Send(ctx, in); err != nil {
 			t.Fatal(err)
@@ -34,7 +29,7 @@ func TestRead_ReturnsMessagesInOrderWithSenders(t *testing.T) {
 	}
 
 	// どちらが開いても、同じ会話の、同じ履歴を得る。
-	for _, in := range []ReadHistoryInput{{Actor: "alice", Peer: "bob"}, {Actor: "bob", Peer: "alice"}} {
+	for _, in := range []ReadHistoryInput{{Actor: as("alice"), Peer: "bob"}, {Actor: as("bob"), Peer: "alice"}} {
 		out, err := f.reader.Read(ctx, in)
 		if err != nil {
 			t.Fatal(err)
@@ -61,7 +56,7 @@ func TestRead_ReturnsMessagesInOrderWithSenders(t *testing.T) {
 func TestRead_UnestablishedConversation_ReturnsEmptyWithoutEstablishing(t *testing.T) {
 	f := newHistoryFixture()
 
-	out, err := f.reader.Read(context.Background(), ReadHistoryInput{Actor: "alice", Peer: "bob"})
+	out, err := f.reader.Read(context.Background(), ReadHistoryInput{Actor: as("alice"), Peer: "bob"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,11 +72,11 @@ func TestRead_UnestablishedConversation_ReturnsEmptyWithoutEstablishing(t *testi
 func TestRead_DoesNotReturnOtherConversations(t *testing.T) {
 	f := newHistoryFixture()
 	ctx := context.Background()
-	if _, err := f.sender.Send(ctx, SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "secret"}); err != nil {
+	if _, err := f.sender.Send(ctx, SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "secret"}); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, in := range []ReadHistoryInput{{Actor: "carol", Peer: "alice"}, {Actor: "carol", Peer: "bob"}} {
+	for _, in := range []ReadHistoryInput{{Actor: as("carol"), Peer: "alice"}, {Actor: as("carol"), Peer: "bob"}} {
 		out, err := f.reader.Read(ctx, in)
 		if err != nil {
 			t.Fatal(err)
@@ -98,10 +93,12 @@ func TestRead_Rejections(t *testing.T) {
 		in   ReadHistoryInput
 		want Rejection
 	}{
-		{"利用者が添えられていない", ReadHistoryInput{Actor: "", Peer: "bob"}, Unauthenticated},
-		{"固定ユーザーでない利用者", ReadHistoryInput{Actor: "mallory", Peer: "nobody"}, Unauthenticated},
-		{"相手が固定ユーザーの中に居ない", ReadHistoryInput{Actor: "alice", Peer: "nobody"}, NotFound},
-		{"自分自身を相手に指定した", ReadHistoryInput{Actor: "alice", Peer: "alice"}, InvalidPeer},
+		{"利用者が添えられていない", ReadHistoryInput{Actor: as(""), Peer: "bob"}, Unauthenticated},
+		{"当たるログイン状態がない", ReadHistoryInput{Actor: as("mallory"), Peer: "nobody"}, Unauthenticated},
+		{"相手が、登録を完了した利用者の中に居ない", ReadHistoryInput{Actor: as("alice"), Peer: "nobody"}, NotFound},
+		{"自分自身を相手に指定した", ReadHistoryInput{Actor: as("alice"), Peer: "alice"}, InvalidPeer},
+		{"自分自身(大文字と小文字を違えた)", ReadHistoryInput{Actor: as("alice"), Peer: "Alice"}, InvalidPeer},
+		{"相手の指定が、識別名の規則を満たさない", ReadHistoryInput{Actor: as("alice"), Peer: "a b"}, NotFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

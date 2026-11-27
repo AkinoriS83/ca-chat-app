@@ -1,26 +1,44 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { BrowserTimer } from './browserTimer'
 import { CryptoSendIdSource } from './cryptoSendIdSource'
-import { StaticFixedUsers } from './staticFixedUsers'
+import { LocationEntryLink } from './locationEntryLink'
 
-describe('StaticFixedUsers', () => {
-  it('固定ユーザーの3人を返す。サーバーの固定ユーザーと、同じ識別名と表示名を持つ', () => {
-    expect(new StaticFixedUsers().list()).toEqual([
-      { handle: 'alice', displayName: 'Alice' },
-      { handle: 'bob', displayName: 'Bob' },
-      { handle: 'carol', displayName: 'Carol' },
-    ])
+describe('LocationEntryLink(DD-03、RL-33)', () => {
+  afterEach(() => {
+    history.replaceState(null, '', '/')
   })
 
-  it('返した一覧を変えても、次に返す一覧は、変わらない', () => {
-    const directory = new StaticFixedUsers()
-    const first = directory.list()
-    first[0]!.displayName = 'changed'
-    first.pop()
+  it('案内の資格を、アドレスの # より後から読み取り、アドレスから除く', () => {
+    history.replaceState({ kept: true }, '', '/?x=1#signup=AbC-_123')
+    const entries = history.length
 
-    expect(directory.list()).toHaveLength(3)
-    expect(directory.list()[0]?.displayName).toBe('Alice')
+    expect(new LocationEntryLink().takeSignupCredential()).toBe('AbC-_123')
+
+    expect(location.hash).toBe('')
+    expect(location.pathname + location.search).toBe('/?x=1')
+    // 履歴の項目を、増やさない。
+    expect(history.length).toBe(entries)
+    expect(history.state).toEqual({ kept: true })
+    // もう一度読み取っても、資格は、ない。
+    expect(new LocationEntryLink().takeSignupCredential()).toBeNull()
+  })
+
+  it('資格がないアドレスでは、null を返し、アドレスを変えない', () => {
+    for (const url of ['/', '/#', '/#other=1', '/?signup=abc', '/#xsignup=abc']) {
+      history.replaceState(null, '', url)
+
+      expect(new LocationEntryLink().takeSignupCredential()).toBeNull()
+      expect(location.pathname + location.search + location.hash).toBe(url === '/#' ? '/' : url)
+    }
+  })
+
+  it('資格が空の場合は、null を返し、アドレスからは、除く', () => {
+    history.replaceState(null, '', '/#signup=')
+
+    expect(new LocationEntryLink().takeSignupCredential()).toBeNull()
+    expect(location.hash).toBe('')
   })
 })
 

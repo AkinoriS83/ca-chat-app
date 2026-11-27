@@ -46,7 +46,8 @@ func (s *testServer) rawRequest(request string) response {
 // 形式の壊れた要求など、想定しない入力に対しても同じである。
 func TestMalformedRequests_GetCodeOnlyResponses(t *testing.T) {
 	s := startServer(t)
-	alice := map[string]string{"Content-Type": "application/json", "X-Fixed-User": "alice"}
+	alice := s.auth("alice")
+	realtimePath := "/api/realtime?session=" + s.as("alice").SessionID
 	valid := `{"sendId":"0b6f2d3e-8a51-4c0e-9f1d-2a7c4e5b6d70","body":"hello"}`
 	tooLarge := `{"sendId":"0b6f2d3e-8a51-4c0e-9f1d-2a7c4e5b6d70","body":"` + strings.Repeat("a", 1<<20) + `"}`
 
@@ -78,7 +79,7 @@ func TestMalformedRequests_GetCodeOnlyResponses(t *testing.T) {
 		{"定義されていない方法(DELETE)", "DELETE", messagesPath("bob"), ``, 404, "not_found"},
 		{"定義されていない方法(PATCH)", "PATCH", messagesPath("bob"), valid, 404, "not_found"},
 		{"定義されていない方法(OPTIONS)", "OPTIONS", messagesPath("bob"), ``, 404, "not_found"},
-		{"接続先への POST", "POST", "/api/realtime?user=alice", ``, 404, "not_found"},
+		{"接続先への POST", "POST", realtimePath, ``, 404, "not_found"},
 		// 正規の形でないパス
 		{"先頭に // があるパス", "GET", "//api/direct-conversations/bob/messages", ``, 404, "not_found"},
 		{"途中に // があるパス", "GET", "/api//direct-conversations/bob/messages", ``, 404, "not_found"},
@@ -88,7 +89,7 @@ func TestMalformedRequests_GetCodeOnlyResponses(t *testing.T) {
 		{"相手が空のパス", "GET", "/api/direct-conversations//messages", ``, 404, "not_found"},
 		{"POST で、// があるパス", "POST", "//api/direct-conversations/bob/messages", valid, 404, "not_found"},
 		// WebSocket の接続を確立する要求でない、接続先への GET
-		{"接続先への、通常の GET", "GET", "/api/realtime?user=alice", ``, 400, "invalid_input"},
+		{"接続先への、通常の GET", "GET", realtimePath, ``, 400, "invalid_input"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -115,8 +116,8 @@ func TestRawRequests_GetCodeOnlyResponses(t *testing.T) {
 		code    string
 	}{
 		{"OPTIONS *", "OPTIONS * HTTP/1.1\r\nHost: app.test\r\n\r\n", 404, "not_found"},
-		{"パーセントで符号化した ..", "GET /api/%2e%2e/api/direct-conversations/bob/messages HTTP/1.1\r\nHost: app.test\r\nX-Fixed-User: alice\r\n\r\n", 404, "not_found"},
-		{"パーセントで符号化した /", "GET /api/direct-conversations/bob%2Fmessages HTTP/1.1\r\nHost: app.test\r\nX-Fixed-User: alice\r\n\r\n", 404, "not_found"},
+		{"パーセントで符号化した ..", "GET /api/%2e%2e/api/direct-conversations/bob/messages HTTP/1.1\r\nHost: app.test\r\n\r\n", 404, "not_found"},
+		{"パーセントで符号化した /", "GET /api/direct-conversations/bob%2Fmessages HTTP/1.1\r\nHost: app.test\r\n\r\n", 404, "not_found"},
 		{"Host が、アプリのものでない", "GET /api/direct-conversations/bob/messages HTTP/1.1\r\nHost: other.example\r\n\r\n", 403, "forbidden_origin"},
 		{"Host がない(HTTP/1.0)", "GET /api/direct-conversations/bob/messages HTTP/1.0\r\n\r\n", 403, "forbidden_origin"},
 		// CONNECT では、要求の対象(ホスト:ポート)が、Host として扱われる。ループバックのアドレスを指定して、
@@ -152,7 +153,9 @@ func TestWebSocketHandshakeFailures_DoNotExposeInternals(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			request := "GET /api/realtime?user=alice HTTP/1.1\r\nHost: app.test\r\n"
+			alice := s.as("alice")
+			request := "GET /api/realtime?session=" + alice.SessionID + " HTTP/1.1\r\nHost: app.test\r\n" +
+				"Cookie: " + sessionCookieName + "=" + alice.Cookie + "\r\n"
 			for name, value := range tt.header {
 				request += name + ": " + value + "\r\n"
 			}
@@ -170,8 +173,8 @@ func TestWebSocketHandshakeFailures_DoNotExposeInternals(t *testing.T) {
 	bob.requireNext(s.mustSend("alice", "bob", "hello"))
 }
 
-// WS-16: 固定ユーザーのいずれでもない利用者としての、リアルタイムの接続は、拒否される。
-// 接続は、確立されない。
+// RL-15(WS-16 に代わる): ログイン状態を添えない、リアルタイムの接続は、拒否される。
+// 接続は、確立されない。識別名を添えるだけの接続も、同じである(RL-42)。
 func TestRealtime_RejectsUnknownUser(t *testing.T) {
 	s := startServer(t)
 
@@ -220,6 +223,8 @@ func TestRealtime_ClosesConnectionWhenDeviceSendsData(t *testing.T) {
 type failBeforeCommit struct {
 	inner port.Transactor
 	err   error
+	// signupErr は、登録の完了のトランザクションを、確定の直前に失敗させる。
+	signupErr error
 }
 
 func (f *failBeforeCommit) InTransaction(ctx context.Context, fn func(ctx context.Context, w port.ConversationWriter) error) error {
@@ -228,6 +233,15 @@ func (f *failBeforeCommit) InTransaction(ctx context.Context, fn func(ctx contex
 			return err
 		}
 		return f.err
+	})
+}
+
+func (f *failBeforeCommit) InSignupTransaction(ctx context.Context, fn func(ctx context.Context, w port.SignupWriter) error) error {
+	return f.inner.InSignupTransaction(ctx, func(ctx context.Context, w port.SignupWriter) error {
+		if err := fn(ctx, w); err != nil {
+			return err
+		}
+		return f.signupErr
 	})
 }
 

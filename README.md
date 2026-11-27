@@ -2,9 +2,9 @@
 
 Clean Architecture を実践して開発する、チャットアプリの雛形です。背景と方針は、[開発方針](docs/development-policy.md)にあります。
 
-現在は、最初の機能スライスである、ウォーキングスケルトン(テキスト1on1チャットを、画面から保管まで薄く貫通させたもの)を実装しています。利用者とログインは、仮実装です([仮実装の箇所の一覧](docs/temporary-implementations.md))。
+現在は、ウォーキングスケルトン(テキスト1on1チャット)に、フェーズ1の最初の機能スライスである「登録とログイン」(登録、ログインとログアウト、識別名による相手の特定)を加えたものを実装しています([仕様](docs/specs/registration-and-login.md))。履歴の一括取得は、仮実装です([仮実装の箇所の一覧](docs/temporary-implementations.md))。
 
-> **注意**: 仮のログインは、なりすましを防ぎません。誰でも、任意の固定ユーザーとして振る舞えます。**ローカルの開発環境の外に、置かないでください**([仕様](docs/specs/walking-skeleton.md) WS-D6)。サーバーは、ループバックのアドレス以外では、待ち受けません。
+> **注意**: 通信経路と、案内(メール)を送る経路を、暗号化していません。通信経路の暗号化の構成ができるまで(設置環境を扱うスライス)、**ローカルの開発環境の外に、置かないでください**([仕様](docs/specs/registration-and-login.md) RL-D1、SEC-2)。サーバーは、ループバックのアドレス以外では、待ち受けず、ループバックのアドレス以外の SMTP のサーバーへは、案内を送りません。
 
 ## 文書
 
@@ -15,9 +15,11 @@ Clean Architecture を実践して開発する、チャットアプリの雛形�
 | [docs/project-plan.md](docs/project-plan.md) | 企画書(機能スコープ、非機能要件の目標水準、完了条件、リスク) |
 | [docs/use-cases.md](docs/use-cases.md) | ユースケース記述 |
 | [docs/specs/walking-skeleton.md](docs/specs/walking-skeleton.md) | ウォーキングスケルトンの仕様と、受け入れ基準 |
+| [docs/specs/registration-and-login.md](docs/specs/registration-and-login.md) | 「登録とログイン」の仕様と、受け入れ基準 |
 | [docs/adr/](docs/adr/) | ADR(設計の判断) |
 | [docs/architecture.md](docs/architecture.md) | アーキテクチャ概要(現在の姿。層、ディレクトリ、import してよい先、実行環境) |
 | [docs/temporary-implementations.md](docs/temporary-implementations.md) | 仮実装の箇所の一覧 |
+| [docs/personal-data.md](docs/personal-data.md) | 取得する個人データの一覧(項目、用途、保管先) |
 | [docs/observations.md](docs/observations.md) | 観察記録 |
 | [docs/dependency-check-log.md](docs/dependency-check-log.md) | 依存規則の検査が、違反を検出したときの記録 |
 | [api/openapi.yaml](api/openapi.yaml) | 通信の形式の定義 |
@@ -29,7 +31,7 @@ Clean Architecture を実践して開発する、チャットアプリの雛形�
 |---|---|---|
 | Go | 1.26 系(`server/go.mod` の `toolchain` の行) | |
 | Node.js | 24 系(`client/.nvmrc`) | npm を含む |
-| Docker | Docker Compose を含む | 保管先(PostgreSQL)を、コンテナで動かす |
+| Docker | Docker Compose を含む | 保管先(PostgreSQL)と、案内を受け取る Mailpit を、コンテナで動かす |
 | make | | |
 | C のコンパイラ(gcc など) | | sqlc のビルドと、`go test -race` に要る |
 
@@ -46,11 +48,13 @@ PostgreSQL のクライアント(`psql`)は、端末に要りません。保管�
 cp .env.example .env
 #    .env を開き、PGPASSWORD を決める(例: openssl rand -hex 16 の出力)。
 #    値は、引用符を付けずに書く。空白と # は、使わない。
+#    「登録とログイン」より前に作った .env には、SMTP_ADDR、MAIL_FROM、MAILPIT_SMTP_PORT、
+#    MAILPIT_UI_PORT を、.env.example から書き足す(ない場合、保管先の起動と、サーバーの起動に失敗する)。
 
 # 2. 道具と依存物を導入する(Go の道具を bin/ に、npm の依存物を client/node_modules に)。
 make setup
 
-# 3. 保管先を起動し、開発用のデータベースに、マイグレーションを適用する。
+# 3. 保管先と、案内を受け取る Mailpit を起動し、開発用のデータベースに、マイグレーションを適用する。
 make db-up
 make db-migrate
 ```
@@ -67,14 +71,15 @@ make db-migrate
 | Go と、サーバーの依存物 | `server/go.mod`、`server/go.sum` |
 | クライアントの依存物と、Node.js の道具 | `client/package.json`(版を、1つに指定する)、`client/package-lock.json` |
 | Go の道具(oapi-codegen、sqlc、goose、golangci-lint、gitleaks) | `Makefile` の先頭の変数 |
-| PostgreSQL | `compose.yaml` のイメージのタグ |
+| PostgreSQL、Mailpit | `compose.yaml` のイメージのタグ |
+| よく使われる秘密の一覧 | `scripts/extract-common-secrets.sh`(取得するコミット)。取り出した結果は、`server/internal/adapter/commonsecrets/list.txt` |
 
 ## 起動
 
 端末を3つ使います。
 
 ```sh
-make db-up        # 保管先(起動していなければ)
+make db-up        # 保管先と、Mailpit(起動していなければ)
 make dev-server   # サーバー(127.0.0.1:8080)
 make dev-client   # クライアントの開発用のサーバー(127.0.0.1:5173)
 ```
@@ -83,13 +88,16 @@ make dev-client   # クライアントの開発用のサーバー(127.0.0.1:5173
 
 `make dev-client` は、起動したときに、`Local: http://127.0.0.1:5173/` と表示します。このアドレスでは、開かないでください。サーバーは、Origin ヘッダーが、`APP_ORIGIN`(`http://localhost:5173`)と一致しない要求を拒否します。`http://127.0.0.1:5173` で開くと、画面と履歴は示されますが(ブラウザは、同一オリジンの GET に、Origin を付けない)、送信は「送信が拒否されました。」となり、リアルタイムの配信も届きません(2026-11-21 に確かめた)。
 
-1. 利用者(Alice、Bob、Carol)から、自分として振る舞う1人を選ぶ。
-2. 相手を選ぶ。
-3. メッセージを入力し、Enter、または「送信」で送る(Shift+Enter で改行)。
+1. 「登録を申し込む」から、連絡先(メールアドレス)を入力して、申し込む。案内は、外へは送られず、Mailpit が受け取る。
+2. Mailpit の画面(`http://127.0.0.1:8025`)で、届いた案内を開き、案内のアドレスを、アプリを開いているブラウザで開く。識別名、表示名、秘密(15文字以上)を入力して、登録する。
+3. 登録した連絡先と秘密で、ログインする。
+4. 相手の識別名を入力して探し、「会話を開く」を押す。メッセージを入力し、Enter、または「送信」で送る(Shift+Enter で改行)。
 
-別のブラウザ(または、別のプロファイル、別のタブ)で、相手の利用者を選ぶと、やり取りできます。
+Mailpit の画面は、`http://127.0.0.1:8025` で開いてください。`http://localhost:8025` で開くと、アプリ(`http://localhost:5173`)のログイン状態を示す資格(Cookie)が、Mailpit にも送られます。Cookie は、ポートを区別しないためです(ADR-018)。
 
-停止は、次の通りです。`make db-down` は、コンテナを削除しますが、データ(ボリューム)は残します。
+ログイン状態は、ブラウザの単位で保たれ、同じブラウザのタブが共有します。別の利用者として、同時に操作するには、互いに状態を共有しないブラウザ(別のブラウザ、または、別のプロファイル)を使います。
+
+停止は、次の通りです。`make db-down` は、コンテナを削除しますが、保管先のデータ(ボリューム)は残します。Mailpit が受け取った案内は、消えます。
 
 ```sh
 # make dev-server と make dev-client は、Ctrl+C で止める。
@@ -105,6 +113,10 @@ make db-down
 | `PGHOST`、`PGPORT`、`PGUSER`、`PGPASSWORD`、`PGDATABASE` | 保管先への接続情報。`PGUSER`、`PGPASSWORD`、`PGDATABASE` がない場合、サーバーは、起動に失敗する |
 | `APP_ORIGIN` | アプリのオリジン(`http://localhost:5173`)。サーバーは、Origin ヘッダーが、これと一致しない要求を拒否する。Host ヘッダーが、このオリジンのホスト(`localhost:5173`)でも、ループバックのアドレスの表記(`127.0.0.1:8080` など)でもない要求も、拒否する。ない場合、サーバーは、起動に失敗する |
 | `LISTEN_ADDR` | サーバーの待ち受け先。既定は、`127.0.0.1:8080`。ループバックのアドレス(127.0.0.0/8、::1)に限る |
+| `SMTP_ADDR` | 案内を送る、SMTP のサーバーの接続先(`ホスト:ポート`)。ホストは、ループバックのアドレスに限る。ない場合、サーバーは、起動に失敗する |
+| `MAIL_FROM` | 案内の送信元のアドレス。ない場合と、アドレスとして読めない場合、サーバーは、起動に失敗する |
+| `MAILPIT_SMTP_PORT`、`MAILPIT_UI_PORT` | Mailpit が、端末(127.0.0.1)に公開するポート(SMTP と、画面・API)。ない場合、`make db-up` は、失敗する。`SMTP_ADDR` のポートと、揃える |
+| `LIMIT_SIGNUP_REQUEST_PER_SOURCE`、`LIMIT_SIGNUP_REQUEST_PER_CONTACT`、`LIMIT_SIGNUP_COMPLETION_PER_SOURCE`、`LIMIT_LOGIN_FAILURE_PER_CONTACT`、`LIMIT_LOGIN_FAILURE_PER_SOURCE`、`LIMIT_PEER_LOOKUP_PER_USER` | 上限(仕様「上限」の表の、上から順)。値は、`回数/時間` で書く(例: `10/1h`、`30/15m`)。ない場合は、既定値で働く。読めない場合と、回数か時間が、正の値でない場合、サーバーは、起動に失敗する |
 | `CLIENT_PORT`、`API_TARGET` | クライアントの開発用のサーバーの、待ち受けるポート(既定は、5173)と、中継先(既定は、`http://127.0.0.1:8080`)。E2Eテストが使う |
 | `E2E_CHROMIUM_PATH` | E2Eテストで使う Chromium の実行ファイルの場所。与えない場合は、Playwright が取得した Chromium を使う(「初回の準備」) |
 
@@ -166,27 +178,29 @@ cd server && ../scripts/with-env.sh go test -race -count=1 ./cmd/server/ -run Te
 `make e2e` は、E2E用のデータベース(`chat_e2e`)を作り直してから、Playwright を実行します。Playwright が、このデータベースにつないだサーバー(127.0.0.1:18080)と、クライアントの開発用のサーバー(127.0.0.1:15173)を起動します。開発用に起動しているサーバーとは、別の待ち受け先を使うため、`make dev-server` を動かしたままで、実行できます。
 
 - テストは、直列に実行します。テストごとに、始める前に、データを空の状態に戻します。
+- 案内は、Mailpit の API で読みます。Mailpit が起動していること(`make db-up`)を要します。E2E用のサーバーには、当たらない値の上限を与えています(`client/playwright.config.ts`)。
 - 失敗を調べるときは、`cd client && ../scripts/with-env.sh npx playwright test --trace on` で、トレースを記録します(既定では、記録しません)。
 
 ## 動作検証
 
-[仕様](docs/specs/walking-skeleton.md)「動作検証」の手順1〜10を、`http://localhost:5173` に対して行います。互いに状態を共有しない、3つのブラウザ(別のブラウザ、または、別のプロファイル)を使います。動作検証は、E2Eテストとは別に、開発者がブラウザで行います(ADR-006)。
+[「登録とログイン」の仕様](docs/specs/registration-and-login.md)「動作検証」の手順1〜11を、`http://localhost:5173` に対して行います。互いに状態を共有しない、3つのブラウザ(別のブラウザ、または、別のプロファイル)を使います。動作検証は、E2Eテストとは別に、開発者がブラウザで行います(ADR-006)。
 
-始める前に、開発用のデータベースを空にしておくと、手順1(メッセージがないこと)を、そのまま確かめられます。
+- 案内は、Mailpit の画面(`http://127.0.0.1:8025`)で読みます。
+- 手順6(サーバーの再起動)は、`make dev-server` を止めて、起動し直します。
+- 手順10(ログインの上限)は、既定値では、同じ連絡先での失敗が、連続して10回に達すると、最後の失敗から15分間、拒否されます。サーバーを再起動すると、計数は、0に戻ります。
+- 手順1〜11は、2026-11-27 に、開発者が、ブラウザで確かめました。手順のうち、1〜4、7、9 に当たる経路は、E2Eテストでも確かめています。
+- 秘密(パスワード)は、15文字以上です。15文字に満たない秘密は、文字の種類に依らず、拒否されます(仕様 RL-D3)。
+
+始める前に、開発用のデータベースを空にする場合は、次を実行します(**登録した利用者も、失われます**)。
 
 ```sh
 docker compose exec -T postgres psql -U "$(grep '^PGUSER=' .env | cut -d= -f2)" -d "$(grep '^PGDATABASE=' .env | cut -d= -f2)" \
-  -c 'TRUNCATE messages, conversations'
+  -c 'TRUNCATE messages, conversations, sessions, signups, users'
 ```
 
-仕様の手順のうち、具体化が要るものは、次の通りに行います。
+ウォーキングスケルトンの仕様の手順([仕様](docs/specs/walking-skeleton.md)「動作検証」)は、登録してログインした利用者で、引き続き行えます。具体化が要るものは、次の通りです(2026-11-21 に確かめた手順。ブラウザ1は、alice としてログインし、bob との会話を開いているものとする)。
 
-**手順7(サーバーと保管先を再起動する)**
-
-1. `make dev-server` を止め、`make db-down`、`make db-up` の順に実行して、`make dev-server` を起動する。
-2. 各ブラウザを再読み込みし、利用者と相手を選び直す。それまでのメッセージが、すべて履歴として示されることを確かめる。
-
-**手順8(サーバーを停止した状態での送信)**
+**ウォーキングスケルトンの仕様の手順8(サーバーを停止した状態での送信)**
 
 1. `make dev-server` を止める。保管先と、クライアントの開発用のサーバーは、止めない。
 2. ブラウザ1から送信する。「送信できませんでした」と、本文が示されることを確かめる(応答を待つ時間は、最大で10秒)。
@@ -200,7 +214,7 @@ docker compose exec -T postgres psql -U "$(grep '^PGUSER=' .env | cut -d= -f2)" 
 
 WSL2 のネットワークが mirrored の場合は、停止したサーバーへの接続が、拒否されずに、時間切れ(約2分)まで待たされることがあります(「開発者の端末に要るもの」)。その場合も、画面は、送信から10秒で「送信できませんでした」を示します。停止している間に会話を開くと、履歴の取得は、中継の応答があるまで「履歴を取得しています…」のままになります。nat では、中継は、すぐに 5xx を返します。
 
-**手順10(サーバーが拒否する本文)**
+**ウォーキングスケルトンの仕様の手順10(サーバーが拒否する本文)**
 
 クライアントは、送信の前に、本文を検証しません。サーバーが拒否する本文を、画面から、そのまま送れます。
 
@@ -208,12 +222,19 @@ WSL2 のネットワークが mirrored の場合は、停止したサーバー�
 2. 拒否されたことと理由が示され、本文が入力欄に残り、会話に示されないことを確かめる。
 3. 1文字を削って、送信する。完了することを確かめる。
 
+## よく使われる秘密の一覧
+
+登録では、よく使われる秘密の一覧にある秘密を、受け付けません(ADR-017)。一覧(`server/internal/adapter/commonsecrets/list.txt`)は、リポジトリに含めてあり、ビルドの時点で、サーバーの実行ファイルに含まれます。出所とライセンスは、同じ置き場所の `NOTICE.md` にあります。
+
+一覧を取り出し直す場合(出所のコミットを変える場合)は、`scripts/extract-common-secrets.sh` のコミットを指定し直して、`make common-secrets` を実行します。外部(raw.githubusercontent.com)への到達を要します。取り出した後に、`NOTICE.md` と、`list_test.go` が持つ件数と要約を直します。2026-11-27 に、この手順で取り出し、ADR-017 の件数(5,392件)と一致することを確かめました。
+
 ## ライセンスの確認
 
 依存物のライセンスは、導入の時点(2026-11-21)で確かめました(ADR-001)。版を上げるときは、確かめ直します。
 
 | 対象 | ライセンス |
 |---|---|
-| サーバーの実行時の依存物 | pgx と、その依存物(MIT)、coder/websocket(ISC)、oapi-codegen/runtime、go-jsonmerge(Apache-2.0、MIT)、google/uuid、golang.org/x/sync、golang.org/x/text(BSD-3-Clause) |
+| サーバーの実行時の依存物 | pgx と、その依存物(MIT)、coder/websocket(ISC)、oapi-codegen/runtime、go-jsonmerge(Apache-2.0、MIT)、google/uuid、golang.org/x/sync、golang.org/x/text、golang.org/x/crypto(2026-11-27 に、v0.59.0 を導入して確かめた)(BSD-3-Clause) |
+| サーバーの実行ファイルに含める、よく使われる秘密の一覧 | SecLists から取り出したもの(MIT。出所は、`server/internal/adapter/commonsecrets/NOTICE.md`。ADR-017) |
 | クライアントの実行時の依存物 | react、react-dom、scheduler(MIT) |
-| 開発の時点で実行する道具 | MIT、ISC、BSD、Apache-2.0 のほか、golangci-lint(GPL-3.0)、lightningcss(MPL-2.0。Vite が使う)がある。いずれも、成果物には含まれない |
+| 開発の時点で実行する道具 | MIT、ISC、BSD、Apache-2.0 のほか、golangci-lint(GPL-3.0)、lightningcss(MPL-2.0。Vite が使う)がある。ローカルの開発環境で、案内を受け取る Mailpit(MIT。ADR-018)は、コンテナで動かす。いずれも、成果物には含まれない |

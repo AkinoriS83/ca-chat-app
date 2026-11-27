@@ -12,11 +12,22 @@ import (
 	"github.com/AkinoriS83/ca-chat-app/server/internal/domain"
 )
 
+func user(id, handle, displayName string) domain.User {
+	return domain.User{ID: domain.UserID(id), Handle: domain.RestoreHandle(handle), DisplayName: domain.RestoreDisplayName(displayName)}
+}
+
 var (
-	alice = domain.User{ID: "00000000-0000-4000-8000-000000000003", Handle: "alice", DisplayName: "Alice"}
-	bob   = domain.User{ID: "00000000-0000-4000-8000-000000000001", Handle: "bob", DisplayName: "Bob"}
-	carol = domain.User{ID: "00000000-0000-4000-8000-000000000002", Handle: "carol", DisplayName: "Carol"}
+	alice = user("00000000-0000-4000-8000-000000000003", "alice", "Alice")
+	bob   = user("00000000-0000-4000-8000-000000000001", "bob", "Bob")
+	carol = user("00000000-0000-4000-8000-000000000002", "carol", "Carol")
+
+	testNow = time.Date(2026, 11, 27, 9, 0, 0, 0, time.UTC)
 )
+
+// sessionOf は、利用者ごとに1つの、期限の前のログイン状態を返す。
+func sessionOf(u domain.User) domain.Session {
+	return domain.Session{ID: domain.SessionID("session-of-" + u.Handle.String()), UserID: u.ID, ExpiresAt: testNow.Add(time.Hour)}
+}
 
 // recordingSink は、port.ConnectionSink の、テスト用の実装である。
 type recordingSink struct {
@@ -24,6 +35,7 @@ type recordingSink struct {
 	accept bool
 	sent   [][]byte
 	closed int
+	ended  int // CloseSessionEnded が呼ばれた回数
 }
 
 func newRecordingSink() *recordingSink { return &recordingSink{accept: true} }
@@ -42,6 +54,12 @@ func (s *recordingSink) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed++
+}
+
+func (s *recordingSink) CloseSessionEnded() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ended++
 }
 
 func newTestHub() *Hub {
@@ -63,12 +81,12 @@ func TestDeliver_SendsToEveryConnectionOfParticipantsOnly(t *testing.T) {
 	hub := newTestHub()
 	ctx := context.Background()
 	alice1, alice2, bob1, carol1 := newRecordingSink(), newRecordingSink(), newRecordingSink(), newRecordingSink()
-	hub.Register(ctx, alice.ID, alice1)
-	hub.Register(ctx, alice.ID, alice2)
-	hub.Register(ctx, bob.ID, bob1)
-	hub.Register(ctx, carol.ID, carol1)
+	hub.Register(ctx, sessionOf(alice), alice1)
+	hub.Register(ctx, sessionOf(alice), alice2)
+	hub.Register(ctx, sessionOf(bob), bob1)
+	hub.Register(ctx, sessionOf(carol), carol1)
 
-	hub.Deliver(ctx, []domain.User{alice, bob}, testMessage(alice, "hello"))
+	hub.Deliver(ctx, testNow, []domain.User{alice, bob}, testMessage(alice, "hello"))
 
 	for name, s := range map[string]*recordingSink{"alice1": alice1, "alice2": alice2, "bob1": bob1} {
 		if len(s.sent) != 1 {
@@ -87,10 +105,10 @@ func TestDeliver_EncodesMessageEvent(t *testing.T) {
 	hub := newTestHub()
 	ctx := context.Background()
 	s := newRecordingSink()
-	hub.Register(ctx, bob.ID, s)
+	hub.Register(ctx, sessionOf(bob), s)
 
 	// 参加者の順は、識別子の順(bob、alice)で渡す。participants は、識別名の昇順になる。
-	hub.Deliver(ctx, []domain.User{bob, alice}, testMessage(alice, "line1\nline2 <b>"))
+	hub.Deliver(ctx, testNow, []domain.User{bob, alice}, testMessage(alice, "line1\nline2 <b>"))
 
 	var got map[string]any
 	if err := json.Unmarshal(s.sent[0], &got); err != nil {
@@ -119,12 +137,12 @@ func TestDeliver_DoesNotSendToUnregisteredConnection(t *testing.T) {
 	hub := newTestHub()
 	ctx := context.Background()
 	gone, staying := newRecordingSink(), newRecordingSink()
-	hub.Register(ctx, alice.ID, gone)
-	hub.Register(ctx, alice.ID, staying)
+	hub.Register(ctx, sessionOf(alice), gone)
+	hub.Register(ctx, sessionOf(alice), staying)
 
 	hub.Unregister(ctx, gone)
 	hub.Unregister(ctx, gone) // 登録されていない接続には、何もしない
-	hub.Deliver(ctx, []domain.User{alice, bob}, testMessage(bob, "hello"))
+	hub.Deliver(ctx, testNow, []domain.User{alice, bob}, testMessage(bob, "hello"))
 
 	if len(gone.sent) != 0 {
 		t.Fatal("登録を解いた書き込み口に届いた")
@@ -139,10 +157,10 @@ func TestRegister_AgainMovesConnectionToNewUser(t *testing.T) {
 	hub := newTestHub()
 	ctx := context.Background()
 	s := newRecordingSink()
-	hub.Register(ctx, alice.ID, s)
-	hub.Register(ctx, carol.ID, s)
+	hub.Register(ctx, sessionOf(alice), s)
+	hub.Register(ctx, sessionOf(carol), s)
 
-	hub.Deliver(ctx, []domain.User{alice, bob}, testMessage(alice, "hello"))
+	hub.Deliver(ctx, testNow, []domain.User{alice, bob}, testMessage(alice, "hello"))
 
 	if len(s.sent) != 0 {
 		t.Fatal("前の利用者の会話のメッセージが届いた")
@@ -155,10 +173,10 @@ func TestDeliver_ClosesConnectionThatCannotQueue(t *testing.T) {
 	ctx := context.Background()
 	full, healthy := newRecordingSink(), newRecordingSink()
 	full.accept = false
-	hub.Register(ctx, bob.ID, full)
-	hub.Register(ctx, bob.ID, healthy)
+	hub.Register(ctx, sessionOf(bob), full)
+	hub.Register(ctx, sessionOf(bob), healthy)
 
-	hub.Deliver(ctx, []domain.User{alice, bob}, testMessage(alice, "hello"))
+	hub.Deliver(ctx, testNow, []domain.User{alice, bob}, testMessage(alice, "hello"))
 
 	if full.closed != 1 {
 		t.Fatalf("加えられなかった書き込み口を、閉じていない: %d", full.closed)
@@ -172,9 +190,9 @@ func TestDeliver_SkipsWhenSenderIsNotParticipant(t *testing.T) {
 	hub := newTestHub()
 	ctx := context.Background()
 	s := newRecordingSink()
-	hub.Register(ctx, alice.ID, s)
+	hub.Register(ctx, sessionOf(alice), s)
 
-	hub.Deliver(ctx, []domain.User{alice, bob}, testMessage(carol, "hello"))
+	hub.Deliver(ctx, testNow, []domain.User{alice, bob}, testMessage(carol, "hello"))
 
 	if len(s.sent) != 0 {
 		t.Fatal("送信者が参加者でないメッセージを、配信した")
@@ -191,14 +209,14 @@ func TestHub_ConcurrentUse(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
 				s := newRecordingSink()
-				hub.Register(ctx, alice.ID, s)
+				hub.Register(ctx, sessionOf(alice), s)
 				hub.Unregister(ctx, s)
 			}
 		}()
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				hub.Deliver(ctx, []domain.User{alice, bob}, testMessage(alice, "hello"))
+				hub.Deliver(ctx, testNow, []domain.User{alice, bob}, testMessage(alice, "hello"))
 			}
 		}()
 	}
@@ -206,7 +224,97 @@ func TestHub_ConcurrentUse(t *testing.T) {
 
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
-	if len(hub.byUser) != 0 || len(hub.owners) != 0 {
-		t.Fatalf("登録が残っている: %d, %d", len(hub.byUser), len(hub.owners))
+	if len(hub.byUser) != 0 || len(hub.sessions) != 0 || len(hub.bySession) != 0 {
+		t.Fatalf("登録が残っている: %d, %d, %d", len(hub.byUser), len(hub.sessions), len(hub.bySession))
+	}
+}
+
+// RL-18、RL-19: CloseBySession は、そのログイン状態による接続のすべてに、ログイン状態が無効になったことを
+// 伝えて閉じ、配信の宛先から外す。同じ利用者の、別のログイン状態による接続は、残る。
+func TestCloseBySession(t *testing.T) {
+	hub := newTestHub()
+	ctx := context.Background()
+	first := sessionOf(alice)
+	second := domain.Session{ID: "another-session-of-alice", UserID: alice.ID, ExpiresAt: testNow.Add(time.Hour)}
+	tab1, tab2, otherBrowser, bob1 := newRecordingSink(), newRecordingSink(), newRecordingSink(), newRecordingSink()
+	hub.Register(ctx, first, tab1)
+	hub.Register(ctx, first, tab2)
+	hub.Register(ctx, second, otherBrowser)
+	hub.Register(ctx, sessionOf(bob), bob1)
+
+	hub.CloseBySession(ctx, first.ID)
+	hub.CloseBySession(ctx, first.ID) // 何度呼んでもよい
+	hub.CloseBySession(ctx, "unknown-session")
+
+	for _, s := range []*recordingSink{tab1, tab2} {
+		if s.ended != 1 || s.closed != 0 {
+			t.Fatalf("ログイン状態が無効になったことを伝えて、閉じていない: ended = %d, closed = %d", s.ended, s.closed)
+		}
+	}
+	if otherBrowser.ended != 0 || bob1.ended != 0 {
+		t.Fatal("別のログイン状態による接続を、閉じた")
+	}
+
+	hub.Deliver(ctx, testNow, []domain.User{alice, bob}, testMessage(bob, "after logout"))
+	if len(tab1.sent) != 0 || len(tab2.sent) != 0 {
+		t.Fatal("閉じた接続に、届けた")
+	}
+	if len(otherBrowser.sent) != 1 || len(bob1.sent) != 1 {
+		t.Fatal("残った接続に、届いていない")
+	}
+	if len(hub.sessions) != 2 || len(hub.bySession) != 2 || len(hub.byUser) != 2 {
+		t.Fatalf("登録が、解かれていない: %d, %d, %d", len(hub.sessions), len(hub.bySession), len(hub.byUser))
+	}
+}
+
+// RL-18、RL-19: CloseExpired は、期限の直前には閉じず、期限には閉じる(domain.Session.ValidAt と同じ判定)。
+func TestCloseExpired(t *testing.T) {
+	hub := newTestHub()
+	ctx := context.Background()
+	expiresAt := testNow.Add(time.Hour)
+	expiring := newRecordingSink()
+	later := newRecordingSink()
+	hub.Register(ctx, domain.Session{ID: "expiring", UserID: alice.ID, ExpiresAt: expiresAt}, expiring)
+	hub.Register(ctx, domain.Session{ID: "later", UserID: alice.ID, ExpiresAt: expiresAt.Add(time.Microsecond)}, later)
+
+	hub.CloseExpired(ctx, expiresAt.Add(-time.Microsecond))
+	if expiring.ended != 0 || later.ended != 0 {
+		t.Fatal("期限の直前に、閉じた")
+	}
+
+	hub.CloseExpired(ctx, expiresAt)
+	if expiring.ended != 1 || later.ended != 0 {
+		t.Fatalf("期限を過ぎた接続だけを、閉じていない: %d, %d", expiring.ended, later.ended)
+	}
+	if len(hub.sessions) != 1 {
+		t.Fatalf("登録が、解かれていない: %d", len(hub.sessions))
+	}
+}
+
+// RL-18: Deliver は、配信の時点で、期限を過ぎたログイン状態による接続に、届けずに、閉じる。
+// 期限の直前には、届ける。
+func TestDeliver_DoesNotSendToExpiredSession(t *testing.T) {
+	hub := newTestHub()
+	ctx := context.Background()
+	expiresAt := testNow.Add(time.Hour)
+	expiring := newRecordingSink()
+	valid := newRecordingSink()
+	hub.Register(ctx, domain.Session{ID: "expiring", UserID: bob.ID, ExpiresAt: expiresAt}, expiring)
+	hub.Register(ctx, domain.Session{ID: "valid", UserID: bob.ID, ExpiresAt: expiresAt.Add(time.Hour)}, valid)
+
+	hub.Deliver(ctx, expiresAt.Add(-time.Microsecond), []domain.User{alice, bob}, testMessage(alice, "just before"))
+	if len(expiring.sent) != 1 || expiring.ended != 0 {
+		t.Fatal("期限の直前の接続に、届いていない")
+	}
+
+	hub.Deliver(ctx, expiresAt, []domain.User{alice, bob}, testMessage(alice, "at expiry"))
+	if len(expiring.sent) != 1 || expiring.ended != 1 {
+		t.Fatalf("期限を過ぎた接続に、届けたか、閉じていない: sent = %d, ended = %d", len(expiring.sent), expiring.ended)
+	}
+	if len(valid.sent) != 2 || valid.ended != 0 {
+		t.Fatal("期限の前の接続に、届いていない")
+	}
+	if len(hub.sessions) != 1 {
+		t.Fatalf("登録が、解かれていない: %d", len(hub.sessions))
 	}
 }

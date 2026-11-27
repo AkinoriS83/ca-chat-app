@@ -19,7 +19,7 @@ GOOSE_TAGS := no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no
 
 .PHONY: help setup tools db-up db-down db-migrate dev-server dev-client \
 	generate generate-check lint check-deps check-deps-selftest \
-	test-server test-client e2e secrets-scan check
+	test-server test-client e2e secrets-scan check common-secrets
 
 help:
 	@echo "手順は、README.md を参照してください。主な手順:"
@@ -54,6 +54,13 @@ db-down:
 
 db-migrate:
 	$(WITH_ENV) bash -c '$(ROOT)/scripts/migrate.sh "$$PGDATABASE"'
+
+## よく使われる秘密の一覧(ADR-017)
+
+# 一覧(server/internal/adapter/commonsecrets/list.txt)を、取り出し直す。
+# 外部への到達を要するため、check には、含めない。
+common-secrets:
+	scripts/extract-common-secrets.sh
 
 ## 起動
 

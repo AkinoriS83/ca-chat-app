@@ -430,7 +430,7 @@ type RejectedError struct {
 
 | 型 | メソッド | 使うポート(`SessionGate` を通すものを除く) |
 |---|---|---|
-| `SessionGate` | (確認の操作は、公開しない) | `SessionStore`、`Clock`、`EventRecorder` |
+| `SessionGate` | (確認の操作は、公開しない) | `SessionStore`、`Clock`(記録は、呼んだユースケースの `attempt` を通すため、`EventRecorder` は、受け取らない) |
 | `SignupRequester` | `Request` | `UserDirectory`、`SignupStore`、`CredentialSource`、`NoticeSender`、`AttemptLimiter`、`Clock`、`EventRecorder` |
 | `SignupCompleter` | `Complete` | `SignupStore`、`CommonSecretList`、`SecretHasher`、`Transactor`、`AttemptLimiter`、`Clock`、`EventRecorder` |
 | `Authenticator` | `Login` | `UserDirectory`、`SecretHasher`、`SessionStore`、`SessionConnections`、`CredentialSource`、`AttemptLimiter`、`Clock`、`EventRecorder` |
@@ -597,7 +597,7 @@ main が1つ作り、認証を要するユースケース(`SessionKeeper.Logout`
 
 #### 4.5.4 postgres
 
-`UserDirectory`、`SessionStore`、`SignupStore` と、`Transactor.InSignupTransaction` を実装します。
+`UserDirectory`、`SessionStore`、`SignupStore` と、`Transactor.InSignupTransaction` を実装します。`SessionStore` と `SignupStore` は、同じ名前の操作(`Find`、`DeleteExpired`)を持つため、`Store` とは別の型(`Store.Sessions()`、`Store.Signups()` で得る)に実装します。
 
 **構造**
 

@@ -9,19 +9,22 @@ import { isRecord, isWireMessage, toMessage } from './wire'
 type ReadyEvent = components['schemas']['ReadyEvent']
 type MessageEvent = components['schemas']['MessageEvent']
 
-// 接続先のパスと、利用者を添えるクエリの名前。サーバー(wsaccept)と、同じ値を持つ。
+// 接続先のパス、ログイン状態の識別子を添えるクエリの名前、ログイン状態が無効になったことを示す終了コード。
+// サーバー(wsaccept)と、同じ値を持つ(ADR-014)。
 const realtimePath = '/api/realtime'
-// 仮実装(WS-P2): 仮のログイン。利用者を添える、クエリの名前。
-const fixedUserQuery = 'user'
+const sessionQuery = 'session'
+const sessionEndedCode = 4401
 
 const readyType: ReadyEvent['type'] = 'ready'
 const messageType: MessageEvent['type'] = 'message'
 
-/** 接続先を、表示中のページのオリジンから作る。 */
-function realtimeUrl(actor: string): string {
+/**
+ * 接続先を、表示中のページのオリジンから作る。
+ * アドレスに載せるのは、ログイン状態の識別子だけである。資格は、ブラウザが、Cookie で付ける。
+ */
+function realtimeUrl(sessionId: string): string {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  // 仮実装(WS-P2): 選んだ固定ユーザーの識別名を、そのまま添える。
-  return `${scheme}//${location.host}${realtimePath}?${fixedUserQuery}=${encodeURIComponent(actor)}`
+  return `${scheme}//${location.host}${realtimePath}?${sessionQuery}=${encodeURIComponent(sessionId)}`
 }
 
 /**
@@ -29,21 +32,21 @@ function realtimeUrl(actor: string): string {
  * 端末からは、何も送らない。接続が切れても、再接続しない。
  */
 export class WebSocketRealtime implements RealtimeChannel {
-  connect(actor: string, listener: RealtimeListener): RealtimeConnection {
+  connect(sessionId: string, listener: RealtimeListener): RealtimeConnection {
     let finished = false
-    const finish = (notify: boolean): void => {
+    const finish = (notify: boolean, sessionEnded = false): void => {
       if (finished) {
         return
       }
       finished = true
       if (notify) {
-        listener.onClosed()
+        listener.onClosed(sessionEnded)
       }
     }
 
     let socket: WebSocket
     try {
-      socket = new WebSocket(realtimeUrl(actor))
+      socket = new WebSocket(realtimeUrl(sessionId))
     } catch {
       finish(true)
       return { close: () => undefined }
@@ -70,7 +73,8 @@ export class WebSocketRealtime implements RealtimeChannel {
       }
     })
     // 接続の確立に失敗した場合も、ブラウザは、close を通知する。
-    socket.addEventListener('close', () => finish(true))
+    // サーバーが、ログイン状態が無効になったことを示して閉じた場合を、終了コードで見分ける。
+    socket.addEventListener('close', (event) => finish(true, event.code === sessionEndedCode))
 
     return {
       close: () => {

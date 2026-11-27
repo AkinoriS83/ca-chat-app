@@ -329,6 +329,71 @@
 | 所見 | 記録する項目を知る層(usecase)と、ログを出力できる層(adapter)が分かれているため、どちらに置いても、何かを、境界の向こうへ渡すことになった(項目を外へ返すか、記録を内へ移すか)。内へ移すと、エラーを1箇所で受けるという、外側の層の利点を失い、usecase の中に、同じ役割の1箇所を、作り直すことになった。この1箇所を通ることは、検査では確かめられず、テストに頼る。一方で、記録する出来事と項目は、usecase のテストで確かめられる見込みである(実装の前であり、確かめていない)。形式に合わないことの印は、2つ目の入力に広がった。認証の確認を usecase に置く分担(ADR-019)の帰結が、操作ごとに現れている。構造がなかった場合との差は、推測である |
 | 気付いた者 | AI |
 
+### OBS-026
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| スライスと工程 | 登録とログイン、実装(手順2〜4) |
+| 区分 | 助け |
+| 出来事 | 詳細設計の順序(DD-37)の通り、既存の操作を変えずに、内側の層と、保管先の実装を、先に加えた。domain の型(連絡先、識別名、表示名、秘密、ログイン状態、上限、出来事)、ポート(加える11と、既存の2つへの操作の追加)、ユースケース(登録の申し込みと完了、ログイン、ログイン状態、片付け、`SessionGate`、`attempt`)、マイグレーション 00002 と保管先の実装を加えた。新しく置いたファイルは、生成したコードを除いて、27(domain 12、usecase 8、postgres 6、マイグレーション 1)である。既存のファイルのうち、機能のために変えたものは、`port.go`、`usecase` の `io.go`、`rejection.go`、`view.go`、`postgres/store.go` の5つである。このほかに、既存のポートに操作を加えたこと(`UserDirectory.FindByContact`、`Transactor.InSignupTransaction`)によって、そのポートを実装する3箇所(`fixeduser`、usecase のテスト用の実装、`cmd/server` のテストの `failBeforeCommit`)に、コンパイルを通すための操作を加えた。ユースケースを呼ぶ adapter と、main の組み立ては、変えていない。各手順の後、`make test-server` は通った |
+| 関わる構造 | 依存規則(内側の層は、外側を知らない)。ポートの境界(テスト用の実装への差し替え)。既存のポートへの操作の追加 |
+| 手がかり | `server/internal/domain/`、`server/internal/application/usecase/`(`signup.go`、`login.go`、`housekeeping.go`、`session_gate.go`、`attempt.go` と、そのテスト)、`server/internal/adapter/postgres/accounts.go`、`server/migrations/00002_create_users_sessions_signups.sql`。詳細設計の 9(手順2〜4) |
+| 所見 | 加えたユースケースは、HTTP と、実際の保管先がない状態で、テスト用のポートの実装だけで、手順と分岐(拒否の順、秘密の計算の回数、無効にしてから接続を閉じる順、記録する出来事)を確かめられた。層の境界で実装を差し替えられたことに当たる。一方で、既存のポートに操作を加えると、その操作を使わない実装(固定ユーザー、テストの包み)にも、空の操作を書くことになった。ポートを、操作ごとに細かく分けていれば、生じない手間であるが、分けると、ポートの数が、さらに増える(OBS-022)。構造がなかった場合との差は、推測である |
+| 気付いた者 | AI |
+
+### OBS-027
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| スライスと工程 | 登録とログイン、実装(手順3、4) |
+| 区分 | どちらとも言えない |
+| 出来事 | 実装の中で、詳細設計と異なる形にした箇所が、2つあった。(1) 保管先の adapter で、ログイン状態と、登録の申し込みのポートを、`Store` とは別の型(`SessionStore`、`SignupStore`。`Store.Sessions()`、`Store.Signups()` で得る)に実装した。2つのポートは、同じ名前で、引数と戻り値が異なる操作(`Find`、`DeleteExpired`)を持ち、Go では、1つの型に、両方を実装できない。詳細設計の 4.5.4 は、型の分け方を定めていなかった。(2) `SessionGate` は、記録のポート(`EventRecorder`)を受け取らない形にした。詳細設計の 4.4.1 の表は、受け取るとしていたが、認証の拒否の記録は、呼んだユースケースの `attempt` を通すため(DD-39)、`SessionGate` 自身は、使わない。詳細設計の表を、直した |
+| 関わる構造 | ポートの境界(ポートごとの操作の名前)。ポートを実装する adapter の中の、型の分け方。usecase の中の、記録の通り道(`attempt`) |
+| 手がかり | `server/internal/adapter/postgres/accounts.go` の `SessionStore`、`SignupStore`。`server/internal/application/usecase/session_gate.go`、`attempt.go`。詳細設計の 4.4.1、4.5.4 |
+| 所見 | ポートを、ユースケースの用語で、小さく定義すると、操作の名前が、ポートの間で重なる。実装する adapter の側で、型を分けることになり、main の組み立てで渡すものが、その分、増える。層の規則は、どちらの形も許し、判断は、言語の制約から決まった。構造がなかった場合(保管先の操作を、1つの型に、別々の名前で置く形)との差は、推測である |
+| 気付いた者 | AI |
+
+### OBS-028
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| スライスと工程 | 登録とログイン、実装(手順5) |
+| 区分 | どちらとも言えない |
+| 出来事 | ポートを実装する adapter を6つ(`argon2id`、`commonsecrets`、`smtpmail`、`ratelimit`、`system`、`eventlog`)と、ユースケースを呼ぶ adapter を1つ(`schedule`)、加えた。それぞれに、依存規則の設定(`server/.golangci.deps.yml` の規則と、`unlisted-package` からの除外)と、規則に違反する見本(計9。見本は、12件から21件になった)を加えた。`make check-deps` の違反は、0件であった。この中で、規約と合わない点が、1つあった。`argon2id` と `commonsecrets` のテストは、ポートに渡す入力として、`domain.Secret` を要する。`Secret` は、中の値を、パッケージの外から作れず、復元用の関数も置かない(詳細設計の 4.2。保管するのは、`SecretHash` である)。テストは、入力の用意に限って、規則を確かめる関数(`domain.NewSecret`)を呼んだ。`.claude/rules/server.md` は、adapter から domain の規則を呼ばない規約の例外を、`NewDirectPair` の1つとしていた。同じ理由(ほかに作る手段がない)の、2つ目に当たる。`schedule` のテストは、ユースケースを組み立てられないため(port と domain を import できない)、呼ぶ関数を差し替えられる形にして、間隔と、終了の合図だけを確かめた |
+| 関わる構造 | adapter の2つの役割と、パッケージごとの import してよい先。規約「ポートを実装する adapter から、domain の規則を呼ばない」(ADR-005「型参照の範囲」、ADR-020)。規則を通してしか作れない型と、復元用の関数 |
+| 手がかり | `server/internal/adapter/` の7つのパッケージと、`depcheck_sample_*.go`。`server/.golangci.deps.yml`。`server/internal/adapter/argon2id/hasher_test.go` と `server/internal/adapter/commonsecrets/list_test.go` の `secretOf`。`grep -rn 'domain\.New' server/internal/adapter` の出力(テストのファイルの3箇所)。OBS-016 |
+| 所見 | パッケージを加える手順(規則、見本、検査)は、7回、同じ形で繰り返せた。規則のない置き場所を、検査が違反として扱うため、加え漏らしは、起きなかった。一方で、「規則を通してしか作れない型」を増やすと(DD-20、DD-21)、その型を入力に取るポートの、adapter のテストが、値を作る手段を要する。復元用の関数を置くか(OBS-016 が、テストのためだけには加えないと定めた)、規約の例外を増やすかの、どちらかになる。今回は、例外を増やした。ADR-020 は、この例外を「adapter のテストが、入力を用意するために、値を作る関数を呼ぶこと」と、一般の形で述べており、その範囲に収まると読んだが、指示の列挙は、開発者の確認が要る。構造がなかった場合との差は、推測である |
+| 気付いた者 | AI |
+
+### OBS-029
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| スライスと工程 | 登録とログイン、実装(手順6) |
+| 区分 | 妨げ |
+| 出来事 | 通信の形式と、既存の操作を、認証の方式(ADR-014)に切り替えた。仮実装 WS-P1(サーバーの側)と WS-P2(サーバーと、通信の形式の側)の置き換えに当たる。変更は、すべての層に及んだ。生成したコードを除いて、変えた、または、除いたファイルは、次の通りである。通信の形式 1(`api/openapi.yaml`)。domain 1(`user.go`)。application 6(`port.go`、usecase の `io.go`、`view.go`、`send_message.go`、`read_history.go`、`connection.go`)と、加えた1(`peer.go`)。adapter 8(`httpapi` の `handler.go`、`respond.go`。`wsaccept` の `handler.go`、`sink.go`。`wsdelivery` の `hub.go`。`postgres` の `accounts.go`。除いた `fixeduser` の2つ)。main 3(`assemble.go`、`main.go`、`config.go`)。マイグレーション 2(00001 の注釈、加えた 00003)。テストは、usecase の5つ、adapter の5つ、`cmd/server` の7つを直し、`cmd/server` に4つを加えた。境界要素は、ポートを5つ変え(`UserDirectory`、`MessageDelivery`、`ConnectionSink`、`ConnectionRegistry`、`Transactor`)、ユースケースの入力を3つ変え、2つを加えた。ADR-013 の見込み(置き換えは、ユースケースを呼ぶ adapter と、ポートの実装に閉じる)の通りには、ならなかった(OBS-020)。`make check-deps` の違反は、0件であった |
+| 関わる構造 | ユースケースを呼ぶ境界(入力のデータ構造の `Actor`、`Malformed`)。ポートの境界。飛ばし禁止(adapter は、ログイン状態を、自分では確かめない)。adapter 同士の import の禁止(Cookie の名前、送信元の取り出し、拒否の応答が、`httpapi` と `wsaccept` の2箇所にある) |
+| 手がかり | `git diff --stat`(本スライスの実装のコミット)。`server/internal/application/usecase/peer.go`、`session_gate.go`。`server/cmd/server/assemble.go`。`server/cmd/server/session_test.go`。OBS-020、OBS-026 |
+| 所見 | 切り替えは、すべての層を、同時に変えることになった。操作を行う利用者を確かめる分担を usecase に置いたこと(ADR-019)と、利用者の型を、規則を通してしか作れない型にしたこと(DD-20)の帰結である。一方で、手順3〜5で、加えるものを、テストとともに先に作っていたため(OBS-026)、切り替えで新しく書いた振る舞いは、相手の指定を扱う手順(`peerResolver`)と、adapter の詰め替えに限られた。既存のユースケースのテスト(送信、履歴)は、入力の `Actor` を置き換えるだけで、拒否の順と、保管と配信の確認を、そのまま引き継げた。`cmd/server` の、引き継いだテスト(WS の基準)も、道具立ての中で、利用者を登録してログインする形に変えると、テストの本体は、ほぼ変えずに通った。adapter の間で重なる処理は、3つ増えた(Cookie の名前、送信元の取り出し、`unauthenticated` と `invalid_input` の応答)。食い違いは、RL-15 のテストが、すべての操作に、同じ応答を求めることで検出する。構造がなかった場合との差は、推測である |
+| 気付いた者 | AI |
+
+### OBS-030
+
+| 項目 | 内容 |
+|---|---|
+| 日付 | 2026-11-27 |
+| スライスと工程 | 登録とログイン、実装(手順7〜9) |
+| 区分 | どちらとも言えない |
+| 出来事 | クライアントを、認証の方式に切り替えた。仮実装 WS-P1、WS-P2、WS-P3 の、クライアントの側の置き換えに当たる。生成した型を除いて、変えた、加えた、除いたファイルは、次の通りである。application は、変えた4(`chatApp.ts`、`model.ts`、`port/chatApi.ts`、`port/realtimeChannel.ts`)、加えた2(`port/authApi.ts`、`port/entryLink.ts`)、除いた1(`port/fixedUserDirectory.ts`)。adapter は、変えた3(`httpChatApi.ts`、`webSocketRealtime.ts`、`wire.ts`)、加えた2(`httpAuthApi.ts`、`locationEntryLink.ts`)、除いた1(`staticFixedUsers.ts`)。ui は、変えた5(`App.tsx`、`Header.tsx`、`ConversationView.tsx`、`rejectionText.ts`、`style.css`)、加えた4(`LoginForm.tsx`、`SignupRequestForm.tsx`、`SignupCompleteForm.tsx`、`PeerFinder.tsx`)、除いた2(`UserPicker.tsx`、`PeerPicker.tsx`)。main は、1(`main.tsx`)。このほかに、テスト用のポートの実装と、テストの6つを直し、E2Eテストを書き直した。ポートは、5つから6つになった(`AuthApi`、`EntryLink` を加え、`FixedUserDirectory` を除き、`ChatApi`、`RealtimeChannel` を変えた)。`make check-deps` の違反は、0件であった。application を先に書き換え、テスト用のポートの実装だけで、ログイン状態の終わりの扱い(C-1、C-14)と、後から届いた結果を捨てることを、確かめてから、adapter と ui を書いた。サーバーとつないで初めて動かしたのは、E2Eテストであり、3つのテストは、最初の実行で通った |
+| 関わる構造 | クライアントの層(application、adapter、ui、main)と、ポート。application が、React と、ブラウザの入出力のAPIを使わない規則。ui と adapter が、互いに import しない規則 |
+| 手がかり | `client/src/application/chatApp.ts`(規則 C-1、C-13〜C-18)、`client/src/application/chatApp.test.ts`、`client/src/ui/App.test.tsx`、`client/e2e/chat.spec.ts`。OBS-029(サーバーの側の置き換え) |
+| 所見 | クライアントでも、置き換えは、すべての層に及んだ。操作を行う利用者の表し方(識別名から、ログイン状態の識別子へ)が、ポートの引数に現れていたためである。一方で、application は、ブラウザのAPIに触れないため、Cookie と、アドレスの扱いは、adapter の2つのファイル(`httpAuthApi.ts`、`locationEntryLink.ts`)に閉じ、状態の遷移は、ブラウザなしに、テストから結果を与えて確かめられた。既存の application のテスト(会話、送信、送り直しなど、約70件)は、利用者を選ぶ操作と、会話を開く操作を、補助の関数に置き換えるだけで、ほぼそのまま通り、振る舞いの規則 C-2〜C-12 が保たれていることの確認に使えた。入力欄の内容を、ui の部品に持たせたこと(DD-35)は、「振る舞いに関わる状態を、ui の部品に持たせない」規約の、解釈が要る箇所であった(入力欄の内容は、振る舞いを左右しないと判断した。指示に書き添えた)。構造がなかった場合との差は、推測である |
+| 気付いた者 | AI |
+
 ## スライスの記録
 
 ### ウォーキングスケルトン

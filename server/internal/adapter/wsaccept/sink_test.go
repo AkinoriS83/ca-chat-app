@@ -73,3 +73,35 @@ func TestSink_ConcurrentSendAndClose(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// DD-28: 閉じた理由を、印として持つ。最初に閉じた理由が、残る。
+func TestSink_CloseReason(t *testing.T) {
+	t.Run("ログイン状態が無効になった", func(t *testing.T) {
+		s := newSink()
+		s.CloseSessionEnded()
+		s.CloseSessionEnded() // 何度呼んでもよい
+		s.Close()
+
+		select {
+		case <-s.closed:
+		default:
+			t.Fatal("閉じたことが、印されていない")
+		}
+		if !s.sessionEnded.Load() {
+			t.Fatal("閉じた理由が、ログイン状態が無効になったことでない")
+		}
+		if s.Send([]byte("x")) {
+			t.Fatal("閉じた書き込み口に、加えられた")
+		}
+	})
+
+	t.Run("そのほかの理由で閉じた後", func(t *testing.T) {
+		s := newSink()
+		s.Close()
+		s.CloseSessionEnded()
+
+		if s.sessionEnded.Load() {
+			t.Fatal("先に閉じた理由が、変わった")
+		}
+	})
+}

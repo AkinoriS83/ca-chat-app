@@ -11,10 +11,12 @@ paths:
 
 | 層 | 置き場所 | 置くもの |
 |---|---|---|
-| application | `src/application`、`src/application/port` | クライアントの振る舞いと状態(`chatApp.ts`)、型(`model.ts`)、ポート |
+| application | `src/application`、`src/application/port` | クライアントの振る舞いと状態(`chatApp.ts`)、型(`model.ts`)、ポート(`authApi.ts`、`chatApi.ts`、`realtimeChannel.ts`、`entryLink.ts`、`timer.ts`、`sendIdSource.ts`) |
 | adapter | `src/adapter` | ポートの実装。通信の形式(生成した型)と、application の型の間の変換(`wire.ts`) |
 | ui | `src/ui` | React の部品。application の状態を表示し、利用者の操作を application に伝える |
 | main | `src/main.tsx` | 組み立てと、起動 |
+
+`client/tools/` は、開発用のサーバーの設定(`vite.config.ts`)が使う関数の置き場所である。層には、当たらない。`src` を import しない。Vitest と、型の検査の対象である。
 
 置き場所ごとの「import してよい先」は、アーキテクチャ概要「置き場所と、import してよい先」の表と、設定(`client/.dependency-cruiser.cjs`。型だけの import も、対象にする。`client/eslint.deps.config.js`)にあります(本書には、写しません)。列挙にない置き場所は、違反です。
 
@@ -31,11 +33,16 @@ paths:
 - ui は、application を経由せずに、通信しない。ui と adapter は、互いに import しない。
 - 生成した型(`src/adapter/generated/`)は、adapter だけが import する。ui と application は、application の型(`model.ts`)を使う。
 - 状態は、`ChatApp` が持ち、変化を通知する。ui は、`subscribe` と `getState` を、React の `useSyncExternalStore` につなぐ。振る舞いに関わる状態を、ui の部品の中に持たせない。
+- 入力欄の内容(連絡先、識別名、表示名、秘密、相手の識別名)は、ui の部品が持ち、送信のときに、application の操作の引数で渡す。application の状態には、保たない(秘密を、画面の全体に配らない)。送信の状態と、拒否の理由は、application が持つ。
+- ログイン状態を示す資格は、ブラウザが、Cookie として保つ。クライアントのコードは、資格に触れない(ADR-014)。ログイン状態の識別子と、案内の資格は、`ChatApp` が、状態の外に持ち、ui には渡さない。保存の仕組み(`localStorage` など)には、置かない。
+- 認証の拒否(`unauthenticated`)と、接続の、ログイン状態が無効になったことを示す終了は、どの操作でも、ログイン状態の終わり(C-1、C-14)として扱う。操作を加えたときは、この扱いを、併せて加える。
 - 振る舞いの規則(C-1〜)は、`chatApp.ts` の先頭に挙げてある。コメントとテストは、この番号で参照する。振る舞いを加える・変えるときは、この一覧を、併せて直す。
-- クライアントは、送信の前に、本文を検証しない。検証と拒否は、サーバーが行い、クライアントは、拒否の `code` を、ui で文言にして示す(`ui/rejectionText.ts`)。
+- クライアントは、送信の前に、入力(本文、連絡先、識別名、表示名、秘密)を検証しない。フォームには、`noValidate` を付け、ブラウザによる検証も、行わない。検証と拒否は、サーバーが行い、クライアントは、拒否の `code` を、ui で文言にして示す(`ui/rejectionText.ts`)。
 - 利用者が入力した内容は、文字として示す。HTML として差し込まない(`dangerouslySetInnerHTML` を、使わない。SEC-4、WS-27)。
 - 実行時の依存物は、react と react-dom だけである。実行時に、外部から、コード、スタイル、フォントを読み込まない(ADR-001)。依存物を加える場合は、開発者に相談する。版は、`package.json` に、1つに指定して書く(WS-32)。
 - メッセージの本文と、認証に関わる秘密や資格を、コンソールに出力しない。
+- 秘密の入力欄は、内容を伏せる形(`type="password"`)とし、貼り付けと、ブラウザの保存の仕組みを、妨げない(`autocomplete` は、ログインでは `current-password`、登録では `new-password`)。
+- サーバーと、同じ値を持つ定数(要求ヘッダー `X-Session-Id`、クエリ `session`、終了コード 4401、案内のアドレスの `#signup=`)は、adapter に置く。食い違いは、E2Eテストが検出する。
 
 ## テストの置き場所
 
@@ -44,10 +51,11 @@ paths:
 | 振る舞いと、状態の遷移 | `src/application/*.test.ts` | Vitest。ブラウザのAPIのない環境。ポートは、テスト用の実装(`application/testPorts.ts`)に差し替え、時間は、テストから進める |
 | ポートの実装と、通信の形式の変換 | `src/adapter/*.test.ts` | Vitest(jsdom) |
 | 画面の表示 | `src/ui/*.test.tsx` | Vitest、jsdom、React Testing Library。同じテスト用のポートを使う |
+| 開発用のサーバーの設定が使う関数 | `tools/*.test.ts` | Vitest |
 | サーバーとクライアントをつないだ動作 | `e2e/` | Playwright。複数の端末にまたがる主要な経路に限る。受け入れ基準を、網羅しない(ADR-006) |
 
 - 受け入れ基準ごとの確認は、application と ui のテストを主とする。E2Eテストを、増やしすぎない。
-- E2Eテストは、直列に実行し、テストごとに、データを空の状態に戻す。`make e2e` で実行する。端末ごとの事情(Chromium の場所など)は、README「初回の準備」にある。
+- E2Eテストは、直列に実行し、テストごとに、データを空の状態に戻す。`make e2e` で実行する。案内は、Mailpit の API で読むため、Mailpit が起動していること(`make db-up`)を要する。連絡先は、実行のたびに変える。端末ごとの事情(Chromium の場所など)は、README「初回の準備」にある。
 - 受け入れ基準を確かめるテストは、基準のIDを、名前かコメントに書く。
 
 ## 置き場所を加えるとき

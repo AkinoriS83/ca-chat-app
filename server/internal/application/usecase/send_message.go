@@ -13,26 +13,43 @@ var errStoredMessageMissing = errors.New("usecase: stored message for duplicate 
 
 // MessageSender は、「メッセージを送る」ユースケースである(UC-09)。
 type MessageSender struct {
-	users    port.UserDirectory
+	gate     *SessionGate
+	resolver *peerResolver
 	reader   port.ConversationReader
 	tx       port.Transactor
 	delivery port.MessageDelivery
+	clock    port.Clock
+	events   port.EventRecorder
 }
 
 // NewMessageSender は、MessageSender を作る。
-func NewMessageSender(users port.UserDirectory, reader port.ConversationReader, tx port.Transactor, delivery port.MessageDelivery) *MessageSender {
-	return &MessageSender{users: users, reader: reader, tx: tx, delivery: delivery}
+func NewMessageSender(gate *SessionGate, users port.UserDirectory, reader port.ConversationReader, tx port.Transactor, delivery port.MessageDelivery, limiter port.AttemptLimiter, rules domain.LimitRules, clock port.Clock, events port.EventRecorder) *MessageSender {
+	return &MessageSender{
+		gate:     gate,
+		resolver: &peerResolver{users: users, reader: reader, limiter: limiter, rules: rules, clock: clock},
+		reader:   reader,
+		tx:       tx,
+		delivery: delivery,
+		clock:    clock,
+		events:   events,
+	}
 }
 
 // Send は、メッセージを保管し、配信する。
-// 拒否は、仕様「メッセージを送る」の表の順に判定する。
-func (s *MessageSender) Send(ctx context.Context, in SendMessageInput) (SendMessageOutput, error) {
-	actor, found, err := s.users.FindByHandle(ctx, in.Actor)
+// 拒否は、次の順に判定する。ログイン状態 → 形式 → 本文 → 送信の識別子の形式 → 自分自身 → 上限 →
+// 相手が居ない → 別の会話との一致(仕様「メッセージを送る」「上限」)。
+// 相手の指定が、識別名の規則を満たさない場合は、相手が居ない場合として扱う。
+func (s *MessageSender) Send(ctx context.Context, in SendMessageInput) (out SendMessageOutput, err error) {
+	a := begin(s.events, "send message", in.Source)
+	defer a.finish(ctx, &err)
+
+	_, actor, err := s.gate.verify(ctx, a, in.Actor)
 	if err != nil {
 		return SendMessageOutput{}, err
 	}
-	if !found {
-		return SendMessageOutput{}, rejected(Unauthenticated)
+	// 形式に合わない要求は、ログイン状態の確認のすぐ後に、ほかの手順より先に、拒否する。
+	if in.Malformed {
+		return SendMessageOutput{}, rejected(InvalidInput)
 	}
 
 	body, err := domain.NewBody(in.Body)
@@ -45,20 +62,11 @@ func (s *MessageSender) Send(ctx context.Context, in SendMessageInput) (SendMess
 		return SendMessageOutput{}, rejected(InvalidInput)
 	}
 
-	// 自分自身を相手に指定した場合、相手は必ず見つかる。
-	// そのため、この順でも、仕様の表の順(自分自身 → 相手が居ない)と、同じ結果になる。
-	peer, found, err := s.users.FindByHandle(ctx, in.Peer)
+	resolved, err := s.resolver.resolve(ctx, a, actor, in.Peer, NotFound)
 	if err != nil {
 		return SendMessageOutput{}, err
 	}
-	if !found {
-		return SendMessageOutput{}, rejected(NotFound)
-	}
-
-	pair, err := domain.NewDirectPair(actor.ID, peer.ID)
-	if err != nil {
-		return SendMessageOutput{}, rejected(InvalidPeer)
-	}
+	peer, pair := resolved.user, resolved.pair
 
 	// 会話の成立、追記の直列化、メッセージの追記を、一体として行う(ADR-012)。
 	// 関数の中では、渡された操作のほかに、ポートを呼ばない。
@@ -82,8 +90,8 @@ func (s *MessageSender) Send(ctx context.Context, in SendMessageInput) (SendMess
 		return SendMessageOutput{}, err
 	}
 
-	// 配信は、保管が確定した後に行う。
-	s.delivery.Deliver(ctx, []domain.User{actor, peer}, stored)
+	// 配信は、保管が確定した後に行う。配信の時点で、期限を過ぎたログイン状態による接続には、届かない。
+	s.delivery.Deliver(ctx, s.clock.Now(), []domain.User{actor, peer}, stored)
 
 	view, err := toMessageView(stored, actor, peer)
 	if err != nil {

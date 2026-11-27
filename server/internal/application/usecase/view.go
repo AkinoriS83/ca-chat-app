@@ -23,7 +23,7 @@ func toMessageView(msg domain.Message, a, b domain.User) (MessageView, error) {
 		return MessageView{}, errSenderNotParticipant
 	}
 
-	participants := []string{a.Handle, b.Handle}
+	participants := []string{a.Handle.String(), b.Handle.String()}
 	if participants[0] > participants[1] {
 		participants[0], participants[1] = participants[1], participants[0]
 	}
@@ -31,9 +31,14 @@ func toMessageView(msg domain.Message, a, b domain.User) (MessageView, error) {
 	return MessageView{
 		Participants:      participants,
 		Seq:               msg.Seq,
-		SenderHandle:      sender.Handle,
-		SenderDisplayName: sender.DisplayName,
+		SenderHandle:      sender.Handle.String(),
+		SenderDisplayName: sender.DisplayName.String(),
 		Body:              msg.Body.String(),
 		SentAt:            msg.SentAt,
 	}, nil
+}
+
+// toUserView は、domain の利用者を、出力のデータ構造に詰め替える。連絡先は、含めない。
+func toUserView(user domain.User) UserView {
+	return UserView{Handle: user.Handle.String(), DisplayName: user.DisplayName.String()}
 }

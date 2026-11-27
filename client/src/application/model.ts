@@ -1,8 +1,8 @@
 // application の型。ui と、ポート(adapter が実装する)が参照する。
 
-/** 固定ユーザー。仮実装(WS-P1): 利用者は、あらかじめ定めた3人に限る。 */
-export type FixedUser = {
-  /** 識別名 */
+/** 利用者。他の利用者に見せるのは、識別名と表示名だけである(RL-27)。 */
+export type UserProfile = {
+  /** 識別名。登録した通りの、大文字と小文字で持つ。 */
   handle: string
   /** 表示名 */
   displayName: string
@@ -25,19 +25,66 @@ export type Outgoing = {
   status: 'sending' | 'failed'
 }
 
-/** サーバーが送信を拒否した理由。 */
+/** サーバーが操作を拒否した理由。 */
 export type RejectionCode =
   | 'invalid_body'
   | 'invalid_input'
   | 'invalid_peer'
   | 'not_found'
   | 'unauthenticated'
+  | 'invalid_fields'
+  | 'handle_taken'
+  | 'invalid_signup_credential'
+  | 'login_failed'
+  | 'rate_limited'
   | 'other'
+
+/** 入力の項目。拒否が、正しくない項目を挙げるために使う。 */
+export type InputField = 'contact' | 'handle' | 'displayName' | 'secret'
+
+/** 登録とログインの操作が、完了しなかった理由。'failed' は、完了できなかったこと(拒否ではない)を表す。 */
+export type FormError = {
+  code: RejectionCode | 'failed'
+  /** 正しくない項目のすべて。code が invalid_fields の場合だけ。 */
+  fields: InputField[]
+}
+
+/** ログインしていないときに示す画面。 */
+export type SignedOutScreen = 'login' | 'signupRequest' | 'signupComplete'
+
+/** ログインしていないときに示す知らせ。 */
+export type SignedOutNotice = 'sessionEnded' | 'signupRequested' | 'signupCompleted'
+
+/** ログイン状態。 */
+export type SessionState =
+  /** ログイン状態を、確かめている。 */
+  | { kind: 'checking' }
+  /** 確かめられなかった。ログインしていないとは、示さない。やり直せる(RL-23)。 */
+  | { kind: 'unknown' }
+  | {
+      kind: 'signedOut'
+      screen: SignedOutScreen
+      /** 操作の結果を、待っている。 */
+      pending: boolean
+      error: FormError | null
+      notice: SignedOutNotice | null
+    }
+  | { kind: 'signedIn'; user: UserProfile; logout: 'idle' | 'pending' | 'failed' }
+
+/** 相手の特定の状態。 */
+export type PeerSearch = {
+  pending: boolean
+  /** 特定した相手。 */
+  found: UserProfile | null
+  error: RejectionCode | 'failed' | null
+}
 
 /** 開いている会話の状態。 */
 export type Conversation = {
-  peer: FixedUser
+  peer: UserProfile
   history: 'loading' | 'loaded' | 'failed'
+  /** 履歴の取得が拒否された理由。拒否でなく、取得できなかった場合は、null。 */
+  historyRejection: RejectionCode | null
   /** 完了したメッセージ。連番の順。 */
   messages: Message[]
   /** 送信中と、送信できなかったメッセージ。送信した順。 */
@@ -49,8 +96,7 @@ export type Conversation = {
 }
 
 export type ChatState = {
-  /** 利用者と相手の選択肢。仮実装(WS-P1、WS-P3): 固定ユーザーの一覧である。 */
-  users: FixedUser[]
-  currentUser: FixedUser | null
+  session: SessionState
+  peerSearch: PeerSearch
   conversation: Conversation | null
 }

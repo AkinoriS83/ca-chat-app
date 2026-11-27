@@ -7,6 +7,7 @@ import { defineConfig, devices } from '@playwright/test'
 const serverPort = 18080
 const clientPort = 15173
 const appOrigin = `http://localhost:${clientPort}`
+const unlimited = '1000000/1h'
 
 // 既定では、Playwright が取得した Chromium(make setup)を使う。版は、@playwright/test の版で決まる。
 // E2E_CHROMIUM_PATH を与えると、端末に導入済みの Chromium を、代わりに使う。
@@ -16,7 +17,7 @@ const chromiumPath = process.env.E2E_CHROMIUM_PATH
 
 export default defineConfig({
   testDir: './e2e',
-  // テストは、直列に実行する。固定ユーザーは3人で、会話は3つしかないためである。
+  // テストは、直列に実行する。テストごとに、保管データを空に戻すためである。
   fullyParallel: false,
   workers: 1,
   retries: 0,
@@ -53,6 +54,14 @@ export default defineConfig({
         PGDATABASE: 'chat_e2e',
         LISTEN_ADDR: `127.0.0.1:${serverPort}`,
         APP_ORIGIN: appOrigin,
+        // 上限は、当たらない値にする。計数は、サーバーのメモリにあり、テストの間で、戻せないためである。
+        // SMTP_ADDR と MAIL_FROM は、make e2e が、.env から与える(案内は、Mailpit が受け取る)。
+        LIMIT_SIGNUP_REQUEST_PER_SOURCE: unlimited,
+        LIMIT_SIGNUP_REQUEST_PER_CONTACT: unlimited,
+        LIMIT_SIGNUP_COMPLETION_PER_SOURCE: unlimited,
+        LIMIT_LOGIN_FAILURE_PER_CONTACT: unlimited,
+        LIMIT_LOGIN_FAILURE_PER_SOURCE: unlimited,
+        LIMIT_PEER_LOOKUP_PER_USER: unlimited,
       },
       // 起動は、サーバーが標準出力に出す、起動の記録で確かめる(下記)。
       wait: { stdout: /"msg":"server started"/ },

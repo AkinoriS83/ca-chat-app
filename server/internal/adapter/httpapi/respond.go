@@ -22,8 +22,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_, _ = w.Write(data)
 }
 
+// writeNoContent は、本文のない、完了の応答(204)を書く。
+func writeNoContent(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // writeError は、拒否とエラーの応答を書く。
-// 応答は、code だけを持つ。文言、詳細、内部の情報は、含めない(WS-30)。
+// 応答は、code だけを持つ(invalid_fields の応答だけは、正しくない項目の一覧を加える。writeUsecaseError)。
+// 文言、詳細、内部の情報は、含めない(WS-30)。
 func writeError(w http.ResponseWriter, code openapi.ErrorCode) {
 	writeJSON(w, statusOf(code), openapi.ErrorResponse{Code: code})
 }
@@ -33,10 +40,14 @@ func statusOf(code openapi.ErrorCode) int {
 	switch code {
 	case openapi.ForbiddenOrigin:
 		return http.StatusForbidden
-	case openapi.InvalidInput, openapi.InvalidBody, openapi.InvalidPeer:
+	case openapi.InvalidInput, openapi.InvalidBody, openapi.InvalidPeer, openapi.InvalidFields, openapi.InvalidSignupCredential:
 		return http.StatusBadRequest
-	case openapi.Unauthenticated:
+	case openapi.Unauthenticated, openapi.LoginFailed:
 		return http.StatusUnauthorized
+	case openapi.HandleTaken:
+		return http.StatusConflict
+	case openapi.RateLimited:
+		return http.StatusTooManyRequests
 	case openapi.NotFound:
 		return http.StatusNotFound
 	default:

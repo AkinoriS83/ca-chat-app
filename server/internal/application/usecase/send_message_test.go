@@ -8,28 +8,19 @@ import (
 )
 
 type sendFixture struct {
-	users    *fakeUsers
-	store    *fakeStore
-	delivery *fakeDelivery
-	sender   *MessageSender
+	*world
+	sender *MessageSender
 }
 
 func newSendFixture() *sendFixture {
-	users := newFakeUsers()
-	store := newFakeStore()
-	delivery := &fakeDelivery{store: store}
-	return &sendFixture{
-		users:    users,
-		store:    store,
-		delivery: delivery,
-		sender:   NewMessageSender(users, store, store, delivery),
-	}
+	w := newWorld().loginAll()
+	return &sendFixture{world: w, sender: w.messageSender()}
 }
 
 func TestSend_StoresAndDelivers(t *testing.T) {
 	f := newSendFixture()
 
-	out, err := f.sender.Send(context.Background(), SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "hello"})
+	out, err := f.sender.Send(context.Background(), SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +53,10 @@ func TestSend_StoresAndDelivers(t *testing.T) {
 	if len(d.participants) != 2 || d.participants[0] != alice || d.participants[1] != bob {
 		t.Fatalf("配信の参加者が違う: %+v", d.participants)
 	}
+	// 配信には、時刻の源から得た時刻を渡す(期限を過ぎたログイン状態による接続に、届けないため)。
+	if !d.now.Equal(testNow) {
+		t.Fatalf("配信に渡した時刻が違う: %v", d.now)
+	}
 	if d.msg.Seq != 1 || d.msg.SenderID != alice.ID || d.msg.SendID.String() != sendID1 || d.msg.Body.String() != "hello" {
 		t.Fatalf("配信したメッセージが違う: %+v", d.msg)
 	}
@@ -71,11 +66,11 @@ func TestSend_BothDirectionsShareOneConversation(t *testing.T) {
 	f := newSendFixture()
 	ctx := context.Background()
 
-	first, err := f.sender.Send(ctx, SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "one"})
+	first, err := f.sender.Send(ctx, SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "one"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := f.sender.Send(ctx, SendMessageInput{Actor: "bob", Peer: "alice", SendID: sendID2, Body: "two"})
+	second, err := f.sender.Send(ctx, SendMessageInput{Actor: as("bob"), Peer: "alice", SendID: sendID2, Body: "two"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +92,7 @@ func TestSend_BothDirectionsShareOneConversation(t *testing.T) {
 func TestSend_NormalizesNewlines(t *testing.T) {
 	f := newSendFixture()
 
-	out, err := f.sender.Send(context.Background(), SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "a\r\nb\rc"})
+	out, err := f.sender.Send(context.Background(), SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "a\r\nb\rc"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,16 +114,21 @@ func TestSend_Rejections(t *testing.T) {
 		in   SendMessageInput
 		want Rejection
 	}{
-		{"利用者が添えられていない", SendMessageInput{Actor: "", Peer: "bob", SendID: sendID1, Body: "hello"}, Unauthenticated},
-		{"固定ユーザーでない利用者", SendMessageInput{Actor: "mallory", Peer: "bob", SendID: sendID1, Body: "hello"}, Unauthenticated},
-		{"利用者の確認は、本文の検証より先", SendMessageInput{Actor: "mallory", Peer: "nobody", SendID: "x", Body: ""}, Unauthenticated},
-		{"本文が空", SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: ""}, InvalidBody},
-		{"本文が長すぎる", SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: tooLong}, InvalidBody},
-		{"本文の検証は、送信の識別子、相手より先", SendMessageInput{Actor: "alice", Peer: "nobody", SendID: "x", Body: " "}, InvalidBody},
-		{"送信の識別子の形式が正しくない", SendMessageInput{Actor: "alice", Peer: "bob", SendID: "not-a-uuid", Body: "hello"}, InvalidInput},
-		{"送信の識別子の検証は、相手より先", SendMessageInput{Actor: "alice", Peer: "alice", SendID: "x", Body: "hello"}, InvalidInput},
-		{"自分自身を相手に指定した", SendMessageInput{Actor: "alice", Peer: "alice", SendID: sendID1, Body: "hello"}, InvalidPeer},
-		{"相手が固定ユーザーの中に居ない", SendMessageInput{Actor: "alice", Peer: "nobody", SendID: sendID1, Body: "hello"}, NotFound},
+		{"利用者が添えられていない", SendMessageInput{Actor: as(""), Peer: "bob", SendID: sendID1, Body: "hello"}, Unauthenticated},
+		{"当たるログイン状態がない", SendMessageInput{Actor: as("mallory"), Peer: "bob", SendID: sendID1, Body: "hello"}, Unauthenticated},
+		{"利用者の確認は、本文の検証より先", SendMessageInput{Actor: as("mallory"), Peer: "nobody", SendID: "x", Body: ""}, Unauthenticated},
+		{"ログイン状態の確認は、形式の確認より先", SendMessageInput{Actor: as("mallory"), Peer: "bob", Malformed: true}, Unauthenticated},
+		{"形式に合わない", SendMessageInput{Actor: as("alice"), Peer: "bob", Malformed: true}, InvalidInput},
+		{"形式の確認は、相手より先", SendMessageInput{Actor: as("alice"), Peer: "alice", Malformed: true}, InvalidInput},
+		{"本文が空", SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: ""}, InvalidBody},
+		{"本文が長すぎる", SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: tooLong}, InvalidBody},
+		{"本文の検証は、送信の識別子、相手より先", SendMessageInput{Actor: as("alice"), Peer: "nobody", SendID: "x", Body: " "}, InvalidBody},
+		{"送信の識別子の形式が正しくない", SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: "not-a-uuid", Body: "hello"}, InvalidInput},
+		{"送信の識別子の検証は、相手より先", SendMessageInput{Actor: as("alice"), Peer: "alice", SendID: "x", Body: "hello"}, InvalidInput},
+		{"自分自身を相手に指定した", SendMessageInput{Actor: as("alice"), Peer: "alice", SendID: sendID1, Body: "hello"}, InvalidPeer},
+		{"自分自身(大文字と小文字を違えた)", SendMessageInput{Actor: as("alice"), Peer: "ALICE", SendID: sendID1, Body: "hello"}, InvalidPeer},
+		{"相手の指定が、識別名の規則を満たさない", SendMessageInput{Actor: as("alice"), Peer: "no such user!", SendID: sendID1, Body: "hello"}, NotFound},
+		{"相手が、登録を完了した利用者の中に居ない", SendMessageInput{Actor: as("alice"), Peer: "nobody", SendID: sendID1, Body: "hello"}, NotFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -151,13 +151,13 @@ func TestSend_Duplicate_CompletesWithStoredMessageWithoutDelivering(t *testing.T
 	f := newSendFixture()
 	ctx := context.Background()
 
-	first, err := f.sender.Send(ctx, SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "original"})
+	first, err := f.sender.Send(ctx, SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "original"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// 送り直し。識別子は、大文字でも一致する。本文が異なっていても、最初に保管した内容を保つ。
-	again, err := f.sender.Send(ctx, SendMessageInput{Actor: "alice", Peer: "bob", SendID: strings.ToUpper(sendID1), Body: "changed"})
+	again, err := f.sender.Send(ctx, SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: strings.ToUpper(sendID1), Body: "changed"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,15 +177,15 @@ func TestSend_Duplicate_InAnotherConversation_IsRejected(t *testing.T) {
 	f := newSendFixture()
 	ctx := context.Background()
 
-	if _, err := f.sender.Send(ctx, SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "to bob"}); err != nil {
+	if _, err := f.sender.Send(ctx, SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "to bob"}); err != nil {
 		t.Fatal(err)
 	}
 	// alice と carol の会話を、別の識別子で成立させておく。
-	if _, err := f.sender.Send(ctx, SendMessageInput{Actor: "alice", Peer: "carol", SendID: sendID2, Body: "to carol"}); err != nil {
+	if _, err := f.sender.Send(ctx, SendMessageInput{Actor: as("alice"), Peer: "carol", SendID: sendID2, Body: "to carol"}); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := f.sender.Send(ctx, SendMessageInput{Actor: "alice", Peer: "carol", SendID: sendID1, Body: "to carol again"})
+	_, err := f.sender.Send(ctx, SendMessageInput{Actor: as("alice"), Peer: "carol", SendID: sendID1, Body: "to carol again"})
 
 	requireRejection(t, err, InvalidInput)
 	if len(f.store.messages) != 2 {
@@ -203,11 +203,11 @@ func TestSend_Duplicate_WithInvalidBody_IsRejectedAsInvalidBody(t *testing.T) {
 	f := newSendFixture()
 	ctx := context.Background()
 
-	if _, err := f.sender.Send(ctx, SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "original"}); err != nil {
+	if _, err := f.sender.Send(ctx, SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "original"}); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := f.sender.Send(ctx, SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "   "})
+	_, err := f.sender.Send(ctx, SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "   "})
 
 	requireRejection(t, err, InvalidBody)
 	if got := f.store.messages[0].Body.String(); got != "original" {
@@ -219,10 +219,10 @@ func TestSend_SameSendIDFromAnotherSender_IsAnotherMessage(t *testing.T) {
 	f := newSendFixture()
 	ctx := context.Background()
 
-	if _, err := f.sender.Send(ctx, SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "from alice"}); err != nil {
+	if _, err := f.sender.Send(ctx, SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "from alice"}); err != nil {
 		t.Fatal(err)
 	}
-	out, err := f.sender.Send(ctx, SendMessageInput{Actor: "bob", Peer: "alice", SendID: sendID1, Body: "from bob"})
+	out, err := f.sender.Send(ctx, SendMessageInput{Actor: as("bob"), Peer: "alice", SendID: sendID1, Body: "from bob"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestSend_StoreFailure_DoesNotDeliver(t *testing.T) {
 			f := newSendFixture()
 			tt.prepare(f)
 
-			_, err := f.sender.Send(context.Background(), SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "hello"})
+			_, err := f.sender.Send(context.Background(), SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "hello"})
 
 			requireFailure(t, err)
 			if len(f.delivery.deliveries) != 0 {
@@ -262,12 +262,12 @@ func TestSend_StoreFailure_DoesNotDeliver(t *testing.T) {
 func TestSend_Duplicate_LookupFailure_IsFailure(t *testing.T) {
 	f := newSendFixture()
 	ctx := context.Background()
-	if _, err := f.sender.Send(ctx, SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "original"}); err != nil {
+	if _, err := f.sender.Send(ctx, SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "original"}); err != nil {
 		t.Fatal(err)
 	}
 	f.store.findErr = errBoom
 
-	_, err := f.sender.Send(ctx, SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "original"})
+	_, err := f.sender.Send(ctx, SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "original"})
 
 	requireFailure(t, err)
 }
@@ -276,7 +276,7 @@ func TestSend_UserDirectoryFailure_IsFailure(t *testing.T) {
 	f := newSendFixture()
 	f.users.err = errBoom
 
-	_, err := f.sender.Send(context.Background(), SendMessageInput{Actor: "alice", Peer: "bob", SendID: sendID1, Body: "hello"})
+	_, err := f.sender.Send(context.Background(), SendMessageInput{Actor: as("alice"), Peer: "bob", SendID: sendID1, Body: "hello"})
 
 	requireFailure(t, err)
 	if len(f.store.calls) != 0 {

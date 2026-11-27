@@ -4,6 +4,104 @@
  */
 
 export interface paths {
+    "/api/signups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 登録を申し込む
+         * @description 連絡先へ、確認のための案内を送ります。
+         *     完了の応答は、連絡先が登録済みかどうかに依らず、同じです。
+         */
+        post: operations["requestSignup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 登録を完了する
+         * @description 案内に含まれる、確認のための資格を確かめて、利用者を作ります。
+         *     確認のための資格は、要求の本文で送ります。ログイン状態は、与えません。
+         */
+        post: operations["completeSignup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/{handle}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 相手の識別名。大文字と小文字を、区別しない */
+                handle: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * 相手を特定する
+         * @description 識別名が、大文字と小文字の違いを除いて、すべて一致する利用者を返します。
+         *     部分一致と、候補の提示は、行いません。利用者の一覧を取得する操作は、ありません。
+         */
+        get: operations["findUser"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 現在のログイン状態を確かめる
+         * @description Cookie の資格に当たる、ログイン中の利用者と、ログイン状態の識別子を返します。
+         *     ログイン状態の識別子は、要しません。状態を、変えません。
+         *     ログイン状態が有効でない場合は、拒否とせず、ログインしていないことを示します。理由は、区別しません。
+         */
+        get: operations["getSession"];
+        put?: never;
+        /**
+         * ログインする
+         * @description 連絡先と秘密を照合し、新しいログイン状態を与えます。資格は、Cookie `chat_session` として与えます。
+         *     要求に付いた資格に当たるログイン状態があれば、無効にします。
+         *     照合の失敗は、理由を区別せずに、`login_failed`(401)で拒否します。
+         */
+        post: operations["login"];
+        /**
+         * ログアウトする
+         * @description ログイン状態を無効にし、Cookie を消します。そのログイン状態による接続を、閉じます。
+         */
+        delete: operations["logout"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/direct-conversations/{peer}/messages": {
         parameters: {
             query?: never;
@@ -39,6 +137,7 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description 利用者。識別名と表示名だけを持つ。連絡先は、どの応答にも含めない */
         UserProfile: {
             /** @description 識別名 */
             handle: string;
@@ -79,9 +178,47 @@ export interface components {
          * @description 拒否とエラーの種類
          * @enum {string}
          */
-        ErrorCode: "forbidden_origin" | "invalid_input" | "unauthenticated" | "invalid_body" | "invalid_peer" | "not_found" | "internal";
+        ErrorCode: "forbidden_origin" | "invalid_input" | "unauthenticated" | "invalid_body" | "invalid_peer" | "not_found" | "invalid_fields" | "rate_limited" | "invalid_signup_credential" | "handle_taken" | "login_failed" | "internal";
+        /**
+         * @description 入力の項目
+         * @enum {string}
+         */
+        InputField: "contact" | "handle" | "displayName" | "secret";
         ErrorResponse: {
             code: components["schemas"]["ErrorCode"];
+            /** @description 正しくない項目のすべて。`code` が `invalid_fields` の場合だけ */
+            fields?: components["schemas"]["InputField"][];
+        };
+        SignupRequest: {
+            /** @description 連絡先。値の検証は、サーバーの内側の層が行う */
+            contact: string;
+        };
+        CompleteSignupRequest: {
+            /** @description 案内に含まれる、確認のための資格 */
+            signupCredential: string;
+            /** @description 識別名。値の検証は、サーバーの内側の層が行う */
+            handle: string;
+            /** @description 表示名。値の検証は、サーバーの内側の層が行う */
+            displayName: string;
+            /** @description 認証に用いる秘密。値の検証は、サーバーの内側の層が行う */
+            secret: string;
+        };
+        LoginRequest: {
+            /** @description 連絡先 */
+            contact: string;
+            /** @description 認証に用いる秘密 */
+            secret: string;
+        };
+        /** @description ログイン状態。資格は、含めない */
+        Session: {
+            /** @description ログイン状態の識別子 */
+            sessionId: string;
+            user: components["schemas"]["UserProfile"];
+        };
+        SessionStatus: {
+            /** @description ログインしているか */
+            authenticated: boolean;
+            session?: components["schemas"]["Session"];
         };
         /** @description 受信を開始できたことの知らせ */
         ReadyEvent: {
@@ -123,6 +260,141 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    requestSignup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignupRequest"];
+            };
+        };
+        responses: {
+            /** @description 申し込みを受け付け、案内を送った */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    completeSignup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteSignupRequest"];
+            };
+        };
+        responses: {
+            /** @description 登録を完了した */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    findUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 相手の識別名。大文字と小文字を、区別しない */
+                handle: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 特定した相手。識別名は、相手が登録した通り */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserProfile"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 現在のログイン状態 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description 与えたログイン状態 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ログアウトした */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listDirectMessages: {
         parameters: {
             query?: never;
