@@ -1,0 +1,74 @@
+# PRでの検査とテストの自動実行(ADR-022)。
+#
+# 検査とテストの内容は、ここには書かない。Makefile の手順を、そのまま呼ぶ。
+# main の保護が、check と e2e の成功を、マージの条件にする(ジョブの名前を変えるときは、保護の設定も改める)。
+#
+# 秘密は、使わない。フォークからのPRにも、同じ内容を実行する(pull_request_target は、使わない)。
+# アクションは、コミットのハッシュで固定する(WS-32)。版を上げるときは、ハッシュと、版のコメントを、併せて改める。
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+# リポジトリの内容の読み取りだけを許す。
+permissions:
+  contents: read
+
+# 同じPRの、古い実行は、取り消す。
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # secrets-scan が、履歴の全体を調べる(WS-34)。
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: client/.nvmrc
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - name: .env を作る
+        run: scripts/ci-env.sh
+      - run: make setup
+      - run: make db-up
+      - run: make check
+
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: client/.nvmrc
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - name: .env を作る
+        run: scripts/ci-env.sh
+      - run: make setup
+      - name: Chromium が要する OS のライブラリを導入する
+        run: cd client && npx playwright install-deps chromium
+      - run: make db-up
+      - run: make e2e

@@ -228,6 +228,21 @@ WSL2 のネットワークが mirrored の場合は、停止したサーバー�
 
 一覧を取り出し直す場合(出所のコミットを変える場合)は、`scripts/extract-common-secrets.sh` のコミットを指定し直して、`make common-secrets` を実行します。外部(raw.githubusercontent.com)への到達を要します。取り出した後に、`NOTICE.md` と、`list_test.go` が持つ件数と要約を直します。2026-11-27 に、この手順で取り出し、ADR-017 の件数(5,392件)と一致することを確かめました。
 
+### PRでの自動実行(CI)
+
+`main` に向けたPRを作ったときと、PRのブランチを更新したときに、GitHub Actions が、検査とテストを実行します([ADR-022](docs/adr/ADR-022-ci-and-merge-gate.md))。定義は、`.github/workflows/ci.yml` です。
+
+| ジョブ | 実行する手順 |
+|---|---|
+| check | `make setup`、`make db-up`、`make check` |
+| e2e | `make setup`、`make db-up`、`make e2e` |
+
+- ジョブは、`make` の手順を、そのまま呼びます。検査とテストの内容を変えるときは、`Makefile` を直します。
+- `.env` は、ジョブの中で、`scripts/ci-env.sh` が、`.env.example` から作ります。`PGPASSWORD` は、実行のたびに生成します。この手順は、開発者の端末では、使いません。
+- E2Eテストのブラウザは、Playwright が取得した Chromium です。
+- CIで、依存規則の違反を検出しても、[検査の記録](docs/dependency-check-log.md)には、残りません。プッシュの前に、ローカルで `make check` を実行する決まりは、変わりません。
+- 使うアクションは、コミットのハッシュで固定しています。版を上げるときは、ハッシュと、版のコメントを、併せて改めます。
+
 ## ライセンスの確認
 
 依存物のライセンスは、導入の時点(2026-11-21)で確かめました(ADR-001)。版を上げるときは、確かめ直します。
@@ -237,4 +252,4 @@ WSL2 のネットワークが mirrored の場合は、停止したサーバー�
 | サーバーの実行時の依存物 | pgx と、その依存物(MIT)、coder/websocket(ISC)、oapi-codegen/runtime、go-jsonmerge(Apache-2.0、MIT)、google/uuid、golang.org/x/sync、golang.org/x/text、golang.org/x/crypto(2026-11-27 に、v0.59.0 を導入して確かめた)(BSD-3-Clause) |
 | サーバーの実行ファイルに含める、よく使われる秘密の一覧 | SecLists から取り出したもの(MIT。出所は、`server/internal/adapter/commonsecrets/NOTICE.md`。ADR-017) |
 | クライアントの実行時の依存物 | react、react-dom、scheduler(MIT) |
-| 開発の時点で実行する道具 | MIT、ISC、BSD、Apache-2.0 のほか、golangci-lint(GPL-3.0)、lightningcss(MPL-2.0。Vite が使う)がある。ローカルの開発環境で、案内を受け取る Mailpit(MIT。ADR-018)は、コンテナで動かす。いずれも、成果物には含まれない |
+| 開発の時点で実行する道具 | MIT、ISC、BSD、Apache-2.0 のほか、golangci-lint(GPL-3.0)、lightningcss(MPL-2.0。Vite が使う)がある。ローカルの開発環境で、案内を受け取る Mailpit(MIT。ADR-018)は、コンテナで動かす。CIが使うアクション(actions/checkout、actions/setup-go、actions/setup-node。MIT。2026-11-27 に確かめた。ADR-022)は、GitHub のランナーの上で動く。いずれも、成果物には含まれない |

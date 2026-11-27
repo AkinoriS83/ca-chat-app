@@ -2,7 +2,7 @@
 
 本書は、リポジトリ全体の「現在の姿」(層の構成、ディレクトリ、依存の向き、実行環境の構成)を説明する文書です([開発方針](development-policy.md)「設計フェーズの進め方」)。採用の理由は、ADR([docs/adr/](adr/))が受け持ちます。本書は、実装と一致するように、保ち続けます。
 
-- 最終更新: 2026-11-27(「登録とログイン」の完了)
+- 最終更新: 2026-11-27(PRでの検査とテストの自動実行を加えた。ADR-022)
 - 現在の範囲: テキスト1on1チャット([ウォーキングスケルトンの仕様](specs/walking-skeleton.md))に、登録、ログインとログアウト、識別名による相手の特定を加えたもの([「登録とログイン」の仕様](specs/registration-and-login.md))。仮実装の箇所(履歴の一括取得)は、[仮実装の箇所の一覧](temporary-implementations.md)にあります。
 
 ## 全体
@@ -61,7 +61,8 @@ client/                          npm のパッケージ
   e2e/                           Playwright のテスト
   tools/                         開発用のサーバーの設定(vite.config.ts)が使う関数。src を import しない
 docs/                            文書
-scripts/                         Makefile から呼ぶ手順。よく使われる秘密の一覧を取り出す手順(extract-common-secrets)
+scripts/                         Makefile から呼ぶ手順。よく使われる秘密の一覧を取り出す手順(extract-common-secrets)。CIで .env を作る手順(ci-env.sh)
+.github/workflows/ci.yml         PRでの検査とテストの自動実行(GitHub Actions)
 .claude/rules/                   AIへの、置き場所ごとの指示(該当するファイルを読み書きしたときに、読み込まれる)
 compose.yaml  Makefile  .env.example  CLAUDE.md  README.md
 ```
@@ -323,6 +324,8 @@ domain の層は、置いていません。業務の規則は、サーバーが�
 - データベースは、3種類を使い分けます。開発用(`.env` の `PGDATABASE`)、サーバーのテスト用(雛形の `chat_test_template` と、テストごとの複製)、E2E用(`chat_e2e`)です。
 - 開発者の端末は、Windows の上の WSL2 です(ネットワークは、nat)。Docker は、Windows の側の Docker Desktop を、WSL との連携によって使います。保管先と Mailpit のポートは、WSL2 の中と、Windows の側の、127.0.0.1 にだけ現れます。Windows の側のブラウザは、`http://localhost:5173` で、クライアントの開発用のサーバーに届きます。
 
+検査とテストは、GitHub Actions のランナー(Ubuntu 24.04)の上でも、実行します(「検査とテスト」)。ランナーの上でも、上の表と同じ待ち受け先(ループバックのアドレス)で、サーバー、保管先、Mailpit を起動します。`.env` は、ジョブの中で作り、ランナーは、ジョブの終わりに破棄されます。ランナーの上のサーバーに、ランナーの外から到達する経路は、ありません。
+
 AWS上の検証環境は、まだありません。設置環境の構成(OPS-1)、通信経路の暗号化(SEC-2)、メールを送信する手段は、フェーズ1の、設置環境を扱うスライスで定めます。
 
 ## 検査とテスト
@@ -337,5 +340,7 @@ AWS上の検証環境は、まだありません。設置環境の構成(OPS-1)�
 | `make test-client` | application のテスト(ブラウザのAPIのない環境)と、adapter、ui、`tools/` のテスト(jsdom) |
 | `make e2e` | サーバーとクライアントをつないだ動作(Playwright。Chromium)。案内は、Mailpit の API で読む |
 | `make secrets-scan` | リポジトリの履歴に、秘密が含まれないこと(gitleaks) |
+
+`main` に向けたPRでは、GitHub Actions(`.github/workflows/ci.yml`)が、2つのジョブを実行します。check は、`make check`(上の表の、`make e2e` を除くすべて)を、e2e は、`make e2e` を実行します。ジョブは、`make` の手順を呼ぶだけで、検査とテストの内容を持ちません。
 
 テストの置き場所は、層の規則から決まっています。`httpapi`、`wsaccept`、`schedule` は、ユースケースの具体的な型を受け取り、`application/port` を import できないため、パッケージの中のテストでは、ユースケースを組み立てません。ユースケースを通る振る舞いは、すべての層を import できる `cmd/server` のテストで確かめます。
