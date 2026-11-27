@@ -149,15 +149,6 @@ linters:
             - $gostd
             - github.com/jackc/pgx/v5
 
-        adapter-fixeduser:
-          list-mode: strict
-          files:
-            - "**/internal/adapter/fixeduser/*.go"
-          allow:
-            - $gostd
-            - github.com/AkinoriS83/ca-chat-app/server/internal/application/port$
-            - github.com/AkinoriS83/ca-chat-app/server/internal/domain$
-
         # golang.org/x/crypto を import できるのは、このパッケージだけである(ADR-015)。
         adapter-argon2id:
           list-mode: strict
@@ -248,7 +239,6 @@ linters:
             - "!**/internal/adapter/postgres/*.go"
             - "!**/internal/adapter/postgres/sqlcgen/*.go"
             - "!**/internal/adapter/postgres/pgtest/*.go"
-            - "!**/internal/adapter/fixeduser/*.go"
             - "!**/internal/adapter/argon2id/*.go"
             - "!**/internal/adapter/commonsecrets/*.go"
             - "!**/internal/adapter/smtpmail/*.go"

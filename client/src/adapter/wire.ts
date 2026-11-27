@@ -109,7 +109,8 @@ export function toRejectionCode(value: unknown): RejectionCode | undefined {
   if (!isRecord(value) || typeof value.code !== 'string') {
     return undefined
   }
-  return rejectionCodes[value.code as WireErrorCode] ?? 'other'
+  // 一覧が持つ code だけを、詰め替える。Object から継承した名前(constructor など)は、一覧にないものとして扱う。
+  return Object.hasOwn(rejectionCodes, value.code) ? rejectionCodes[value.code as WireErrorCode] : 'other'
 }
 
 /**

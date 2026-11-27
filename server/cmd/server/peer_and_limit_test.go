@@ -83,7 +83,7 @@ func TestUserInformation_IsLimitedToHandleAndDisplayName(t *testing.T) {
 	sent := s.sendFrom(alice, "bob", "hello")
 	history := s.historyFrom(alice, "bob")
 	event := bobConn.next()
-	login := s.loginResponse(fixedAccounts["alice"].Contact, fixedAccounts["alice"].Secret, "")
+	login := s.loginResponse(presetAccounts["alice"].Contact, presetAccounts["alice"].Secret, "")
 	current := s.getSession(alice.Cookie)
 
 	var profile map[string]any
@@ -91,7 +91,7 @@ func TestUserInformation_IsLimitedToHandleAndDisplayName(t *testing.T) {
 		t.Fatalf("特定の応答が、識別名と表示名のほかを含む: %s", find.Body)
 	}
 	for name, body := range map[string][]byte{"特定": find.Body, "送信": sent.Body, "履歴": history.Body, "配信": event.Raw, "ログイン": login.Body, "ログイン状態": current.Body} {
-		for _, forbidden := range []string{"@", "contact", "secret", "argon2", fixedAccounts["bob"].ID, fixedAccounts["alice"].ID} {
+		for _, forbidden := range []string{"@", "contact", "secret", "argon2", presetAccounts["bob"].ID, presetAccounts["alice"].ID} {
 			if strings.Contains(string(body), forbidden) {
 				t.Fatalf("%s の応答が、%q を含む: %s", name, forbidden, body)
 			}
@@ -154,7 +154,7 @@ func TestLimit_SignupRequestPerContact(t *testing.T) {
 	s := startServer(t, withLimits(func(r *domain.LimitRules) {
 		r.SignupRequestPerContact = domain.LimitRule{Count: 2, Window: time.Hour}
 	}))
-	registered := fixedAccounts["alice"].Contact
+	registered := presetAccounts["alice"].Contact
 
 	var limited []response
 	for _, contact := range []string{dave.Contact, registered} {
@@ -194,7 +194,7 @@ func TestLimit_SignupCompletionPerSource(t *testing.T) {
 	valid := s.completeSignup(credential, dave.Handle, dave.DisplayName, dave.Secret)
 	requireRateLimited(t, valid)
 	requireSameResponse(t, valid, s.completeSignup("wrong", "alice", "", ""))
-	if s.count("users") != fixedUserCount {
+	if s.count("users") != presetUserCount {
 		t.Fatal("上限で拒否した完了で、利用者を作った")
 	}
 
@@ -212,7 +212,7 @@ func TestLimit_LoginFailurePerContact(t *testing.T) {
 	s := startServer(t, withLimits(func(r *domain.LimitRules) {
 		r.LoginFailurePerContact = domain.LimitRule{Count: 3, Window: 15 * time.Minute}
 	}))
-	a := fixedAccounts["alice"]
+	a := presetAccounts["alice"]
 	existing := s.newBrowser("alice")
 	const wrong = "wrong passphrase for tests"
 
@@ -263,7 +263,7 @@ func TestLimit_LoginFailurePerContact_WindowAndInvalidContact(t *testing.T) {
 	s := startServer(t, withLimits(func(r *domain.LimitRules) {
 		r.LoginFailurePerContact = domain.LimitRule{Count: 3, Window: 15 * time.Minute}
 	}))
-	a := fixedAccounts["alice"]
+	a := presetAccounts["alice"]
 	const wrong = "wrong passphrase for tests"
 
 	for i := 0; i < 2; i++ {
@@ -287,7 +287,7 @@ func TestLimit_LoginFailurePerSource(t *testing.T) {
 	s := startServer(t, withLimits(func(r *domain.LimitRules) {
 		r.LoginFailurePerSource = domain.LimitRule{Count: 3, Window: 15 * time.Minute}
 	}))
-	a := fixedAccounts["alice"]
+	a := presetAccounts["alice"]
 
 	// 成功したログインは、何度行っても、数えない。
 	for i := 0; i < 5; i++ {
@@ -320,7 +320,7 @@ func TestLimit_PeerLookupPerUser(t *testing.T) {
 		r.PeerLookupPerUser = domain.LimitRule{Count: 3, Window: time.Hour}
 	}))
 	alice := s.as("alice")
-	aliceID := fixedAccounts["alice"].ID
+	aliceID := presetAccounts["alice"].ID
 
 	// 成立した会話がある相手(bob)。最初の送信は、1回と数える。
 	if resp := s.sendFrom(alice, "bob", "hello bob"); resp.Status != http.StatusOK {

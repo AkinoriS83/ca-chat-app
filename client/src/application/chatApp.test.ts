@@ -248,6 +248,19 @@ describe('ログイン(C-15、RL-12、RL-13)', () => {
     expect(auth.loginCalls).toHaveLength(1)
   })
 
+  it('結果を待つ間は、画面を切り替えない。その間に完了したログインを、捨てない(C-19)', async () => {
+    const { app, auth, session } = setup()
+    await signedOutAtLogin()
+
+    app.login('alice@example.com', 'secret')
+    app.showSignupRequest()
+    expect(session()).toMatchObject({ screen: 'login', pending: true })
+
+    auth.loginCalls[0]?.resolve({ kind: 'completed', session: sessionOf(alice) })
+    await settled()
+    expect(session()).toEqual({ kind: 'signedIn', user: alice, logout: 'idle' })
+  })
+
   it('ログインの画面を示していなければ、ログインしない', () => {
     const { app, auth } = setup()
 
@@ -364,17 +377,44 @@ describe('登録(C-17、RL-01、RL-05〜RL-07)', () => {
     expect(auth.completeCalls).toHaveLength(1)
   })
 
-  it('画面を切り替えた後に届いた、前の画面の操作の結果は、捨てる', async () => {
+  it('申し込みの結果を待つ間は、画面を切り替えない。結果は、捨てずに示す(C-19)', async () => {
     const { app, auth, session } = setup()
     await signedOutAtLogin()
     app.showSignupRequest()
     app.requestSignup('dave@example.com')
 
     app.showLogin()
+    expect(session()).toMatchObject({ screen: 'signupRequest', pending: true })
+
     auth.signupCalls[0]?.resolve({ kind: 'completed' })
     await settled()
+    expect(session()).toMatchObject({ screen: 'signupRequest', pending: false, notice: 'signupRequested' })
 
+    // 結果を受けた後は、切り替えられる。
+    app.showLogin()
     expect(session()).toEqual({ kind: 'signedOut', screen: 'login', pending: false, error: null, notice: null })
+  })
+
+  it('登録の完了の結果を待つ間は、画面を切り替えず、案内の資格も捨てない(C-19)', async () => {
+    const { app, auth, session } = setup('signup-credential')
+    app.start()
+    app.completeSignup('Dave_01', 'Dave', 'dave-secret')
+
+    app.showLogin()
+    app.showSignupRequest()
+    expect(session()).toMatchObject({ screen: 'signupComplete', pending: true })
+
+    // 拒否の後、同じ資格で、やり直せる。
+    auth.completeCalls[0]?.resolve({ kind: 'rejected', code: 'handle_taken', fields: [] })
+    await settled()
+    app.completeSignup('Dave_02', 'Dave', 'dave-secret')
+    expect(auth.completeCalls[1]?.request.credential).toBe('signup-credential')
+
+    // 完了は、切り替えを試みた後でも、ログインの画面に、完了したこととして示す。
+    app.showSignupRequest()
+    auth.completeCalls[1]?.resolve({ kind: 'completed' })
+    await settled()
+    expect(session()).toEqual({ kind: 'signedOut', screen: 'login', pending: false, error: null, notice: 'signupCompleted' })
   })
 
   it('ログイン中は、画面を切り替えない', async () => {

@@ -283,6 +283,44 @@ describe('登録(RL-01、RL-03、RL-06、RL-07)', () => {
     click('登録を申し込み直す')
     expect(screen.getByRole('heading', { name: '登録の申し込み' })).toBeTruthy()
   })
+
+  it('結果を待つ間は、画面を切り替えるボタンを、無効にする(C-19)', async () => {
+    const switchButton = (name: string) => screen.getByRole<HTMLButtonElement>('button', { name })
+
+    // ログイン。待つ間に完了したログインを、示す。
+    const login = await atLogin()
+    fill(contactLabel, 'alice@example.com')
+    fill(secretLabel, 'alice-secret')
+    expect(switchButton('登録を申し込む').disabled).toBe(false)
+    click('ログイン')
+    expect(switchButton('登録を申し込む').disabled).toBe(true)
+    click('登録を申し込む')
+    expect(screen.getByRole('heading', { name: 'ログイン' })).toBeTruthy()
+    await happen(() => login.auth.loginCalls[0]?.resolve({ kind: 'completed', session: sessionOf(alice) }))
+    expect(screen.getByTestId('current-user').textContent).toBe('Alice')
+    cleanup()
+
+    // 登録の申し込み。結果を受けると、切り替えられる。
+    const request = await atLogin()
+    click('登録を申し込む')
+    fill(contactLabel, 'dave@example.com')
+    click('申し込む')
+    expect(switchButton('ログインの画面へ').disabled).toBe(true)
+    await happen(() => request.auth.signupCalls[0]?.resolve({ kind: 'completed' }))
+    expect(switchButton('ログインの画面へ').disabled).toBe(false)
+    cleanup()
+
+    // 登録の完了。
+    const complete = renderApp('signup-credential')
+    fill('識別名', 'Dave_01')
+    fill('表示名', 'Dave')
+    fill(secretLabel, 'dave passphrase for tests')
+    click('登録する')
+    expect(switchButton('登録を申し込み直す').disabled).toBe(true)
+    expect(switchButton('ログインの画面へ').disabled).toBe(true)
+    await happen(() => complete.auth.completeCalls[0]?.resolve({ kind: 'completed' }))
+    expect(screen.getByRole('status').textContent).toBe('登録を完了しました。登録した連絡先と、秘密で、ログインしてください。')
+  })
 })
 
 describe('ログアウトと、ログイン状態の終わり(RL-17、RL-19、RL-20、RL-22)', () => {

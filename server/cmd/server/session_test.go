@@ -37,7 +37,7 @@ func (s *testServer) requireNotAuthenticated(cookie string) {
 // 連絡先は、大文字と小文字の違いと、前後の空白に依らない。
 func TestLogin_GrantsSession(t *testing.T) {
 	s := startServer(t)
-	a := fixedAccounts["alice"]
+	a := presetAccounts["alice"]
 
 	for _, contact := range []string{a.Contact, "ALICE@Example.COM", "  alice@example.com\n"} {
 		resp := s.loginResponse(contact, a.Secret, "")
@@ -105,7 +105,7 @@ func TestLogin_WholeSecretMatters(t *testing.T) {
 // 秘密の計算の回数は、usecase のテストで確かめる。
 func TestLogin_FailuresAreIndistinguishable(t *testing.T) {
 	s := startServer(t)
-	a := fixedAccounts["alice"]
+	a := presetAccounts["alice"]
 	s.mustRequestSignup(dave.Contact, dave.Contact)
 
 	wrongSecret := s.loginResponse(a.Contact, "wrong passphrase for tests", "")
@@ -120,7 +120,7 @@ func TestLogin_FailuresAreIndistinguishable(t *testing.T) {
 		"秘密が、入力の規則を満たさない(短い)": s.loginResponse(a.Contact, "x", ""),
 		"秘密が空": s.loginResponse(a.Contact, "", ""),
 		"秘密が、入力の規則を満たさない(長い)": s.loginResponse(a.Contact, strings.Repeat("a", 129), ""),
-		"他の利用者の秘密":            s.loginResponse(a.Contact, fixedAccounts["bob"].Secret, ""),
+		"他の利用者の秘密":            s.loginResponse(a.Contact, presetAccounts["bob"].Secret, ""),
 		"秘密が、文字列として正しくない":     s.loginResponse(a.Contact, "\xff\xfe", ""),
 	}
 	for name, resp := range others {
@@ -160,7 +160,7 @@ func TestLogin_AnotherBrowserKeepsFirstSession(t *testing.T) {
 // 照合に失敗したログインは、それまでのログイン状態を変えない。
 func TestLogin_InBrowserWithSessionRevokesPrevious(t *testing.T) {
 	s := startServer(t)
-	a := fixedAccounts["alice"]
+	a := presetAccounts["alice"]
 	before := s.newBrowser("alice")
 
 	requireError(t, s.loginResponse(a.Contact, "wrong passphrase for tests", before.Cookie), http.StatusUnauthorized, "login_failed")
@@ -388,7 +388,7 @@ func TestExpiry_StopsDeliveryBeforeSweep(t *testing.T) {
 // alice のログイン状態による接続は、閉じられる。前の識別子と、新しい Cookie の組の操作は、拒否される。
 // alice を示したままの端末が、carol として送信することはない。
 func TestReloginInSameBrowser_OldTabCannotActAsNewUser(t *testing.T) {
-	c := fixedAccounts["carol"]
+	c := presetAccounts["carol"]
 
 	t.Run("ログインし直し(ログアウトを経ない)", func(t *testing.T) {
 		s := startServer(t)
@@ -429,7 +429,7 @@ func TestReloginInSameBrowser_OldTabCannotActAsNewUser(t *testing.T) {
 
 	t.Run("同じ利用者としてのログインし直しでも、前の識別子は使えない", func(t *testing.T) {
 		s := startServer(t)
-		a := fixedAccounts["alice"]
+		a := presetAccounts["alice"]
 		before := s.newBrowser("alice")
 		oldTab := s.connectAs(before)
 

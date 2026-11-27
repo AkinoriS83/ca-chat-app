@@ -148,6 +148,9 @@ describe('HttpChatApi', () => {
         { status: 429, code: 'rate_limited', want: 'rate_limited' },
         { status: 403, code: 'forbidden_origin', want: 'other' },
         { status: 400, code: 'some_new_code', want: 'other' },
+        // Object から継承した名前を、一覧にある code として、扱わない。
+        { status: 400, code: 'constructor', want: 'other' },
+        { status: 400, code: 'toString', want: 'other' },
       ]
       for (const { status, code, want } of cases) {
         fetchMock.mockResolvedValue(jsonResponse(status, { code }))

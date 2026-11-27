@@ -15,8 +15,19 @@ describe('redactApiPaths', () => {
     ['[vite] proxied http://localhost:5173/api/users/dave -> 502', `[vite] proxied http://localhost:5173${REDACTED_API_PATH} -> 502`],
     ['/api/users/a then /api/users/b', `${REDACTED_API_PATH} then ${REDACTED_API_PATH}`],
     ['/api/users/%E3%81%82?x=1#frag end', `${REDACTED_API_PATH} end`],
+    // ブラウザが、パスの中で、そのまま送る文字(' ( ) など)で、打ち切らない。入力の後ろを、残さない。
+    ["http proxy error: /api/users/o'brien", `http proxy error: ${REDACTED_API_PATH}`],
+    ['http proxy error: /api/users/foo(bar)', `http proxy error: ${REDACTED_API_PATH}`],
+    ["http proxy error: /api/users/a!b~c*d.e-f_g'h(i)j/messages", `http proxy error: ${REDACTED_API_PATH}`],
   ])('%s', (message, expected) => {
     expect(redactApiPaths(message)).toBe(expected)
+  })
+
+  it('色付きの文言では、パスの直後の、色を戻すための並びを、残す', () => {
+    const esc = String.fromCharCode(0x1b)
+    const colored = `${esc}[31mhttp proxy error: /api/users/Alice_01${esc}[39m\nError: connect ECONNREFUSED`
+
+    expect(redactApiPaths(colored)).toBe(`${esc}[31mhttp proxy error: ${REDACTED_API_PATH}${esc}[39m\nError: connect ECONNREFUSED`)
   })
 
   it('/api/ で始まらないパスと、ほかの文言は、変えない', () => {

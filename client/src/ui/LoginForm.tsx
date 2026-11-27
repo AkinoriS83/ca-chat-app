@@ -68,7 +68,8 @@ export function LoginForm({ pending, error, notice, onLogin, onShowSignupRequest
         </button>
       </form>
       <p className="auth-switch">
-        <button type="button" className="link-button" onClick={onShowSignupRequest}>
+        {/* 結果を待つ間は、画面を切り替えない(C-19)。 */}
+        <button type="button" className="link-button" disabled={pending} onClick={onShowSignupRequest}>
           登録を申し込む
         </button>
       </p>

@@ -84,6 +84,9 @@ const noPeerSearch: PeerSearch = { pending: false, found: null, error: null }
  *   示し、同じ画面に留まる。資格が無効である拒否でも、同じ画面に留まり、申し込み直しを求める。
  * - C-18(RL-24〜RL-26、RL-31): findPeer は、結果(識別名と表示名)か、拒否の理由を示す。openFoundPeer は、
  *   特定した相手との会話を、C-2 の通りに開く。履歴の取得が拒否された場合は、理由を示す。
+ * - C-19: login、requestSignup、completeSignup の結果を待つ間は、showLogin と showSignupRequest は、
+ *   何もしない(画面を切り替えない)。切り替えると、サーバーで完了した操作の結果(ログイン、登録の完了)を、
+ *   示せなくなるためである。
  */
 export class ChatApp {
   private readonly ports: ChatAppPorts
@@ -97,7 +100,7 @@ export class ChatApp {
 
   /**
    * ログイン状態が始まる、または、終わるたびに増える。それより前の結果を、捨てるために使う(C-1)。
-   * ログインしていないときの画面を切り替えたときも、増やす(前の画面の操作の結果を、捨てる)。
+   * ログインしていないときの画面の切り替えでは、増やさない。結果を待つ間は、切り替えないためである(C-19)。
    */
   private session = 0
   /** 会話の状態を作り直す、または、捨てるたびに増える。前の会話への結果を、捨てるために使う(C-11)。 */
@@ -173,12 +176,12 @@ export class ChatApp {
     }, failed)
   }
 
-  /** ログインの画面を示す。登録を続ける画面から移る場合は、案内の資格を捨てる。 */
+  /** ログインの画面を示す。登録を続ける画面から移る場合は、案内の資格を捨てる。結果を待つ間は、何もしない(C-19)。 */
   readonly showLogin = (): void => {
     this.showScreen('login')
   }
 
-  /** 登録の申し込みの画面を示す。 */
+  /** 登録の申し込みの画面を示す。結果を待つ間は、何もしない(C-19)。 */
   readonly showSignupRequest = (): void => {
     this.showScreen('signupRequest')
   }
@@ -462,11 +465,12 @@ export class ChatApp {
   // ---- ログインしていないときの画面 ----
 
   private showScreen(screen: 'login' | 'signupRequest'): void {
-    if (this.state.session.kind !== 'signedOut') {
+    const current = this.state.session
+    // C-19: 結果を待つ間は、切り替えない。
+    if (current.kind !== 'signedOut' || current.pending) {
       return
     }
-    // 前の画面の操作の結果を、捨てる。案内の資格は、登録を続ける画面を離れると、捨てる。
-    this.session++
+    // 案内の資格は、登録を続ける画面を離れると、捨てる。
     this.signupCredential = null
     this.setSession(signedOut(screen))
   }

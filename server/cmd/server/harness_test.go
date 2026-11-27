@@ -161,7 +161,7 @@ type testServer struct {
 	options     serverOptions
 
 	mu       sync.Mutex
-	browsers map[string]*browser // 固定の利用者(alice、bob、carol)ごとの、既定のブラウザ
+	browsers map[string]*browser // あらかじめ置く利用者(alice、bob、carol)ごとの、既定のブラウザ
 }
 
 type serverOption func(*serverOptions)
@@ -268,15 +268,15 @@ func startServerOn(t *testing.T, pool *pgxpool.Pool, clock *testClock, options s
 		clock: clock, notices: notices, housekeeper: app.Housekeeper, options: options,
 		browsers: map[string]*browser{},
 	}
-	// 固定の利用者の行は、最初から置く。相手として指定されるためである。
-	for name := range fixedAccounts {
-		s.ensureFixed(name)
+	// あらかじめ置く利用者の行は、最初から置く。相手として指定されるためである。
+	for name := range presetAccounts {
+		s.ensurePreset(name)
 	}
 	return s
 }
 
-// fixedUserCount は、最初から置く、固定の利用者の数である。
-const fixedUserCount = 3
+// presetUserCount は、あらかじめ置く利用者の数である。
+const presetUserCount = 3
 
 // testHasher は、秘密の計算を、実際に行う。同時に行う計算の数の上限を、テストのプロセスの全体で
 // 共有するために、1つだけ作る(メモリを、約76 MiB に限る)。
@@ -301,58 +301,58 @@ type account struct {
 	Secret      string
 }
 
-// 固定の利用者。ウォーキングスケルトンから引き継いだテスト(RL-41)が、名前で指定する。
+// あらかじめ置く利用者。ウォーキングスケルトンから引き継いだテスト(RL-41)が、名前で指定する。
 // 識別子の順は、識別名の順と、わざと変えてある(WS-37)。通信の形式の participants は、識別名の昇順であり、
 // domain.DirectPair は、識別子の昇順である。2つの順が同じだと、participants を DirectPair の順のまま
 // 返す誤りを、テストで検出できない。登録の操作は、識別子を指定できないため、行を、直接に作る。
-var fixedAccounts = map[string]account{
+var presetAccounts = map[string]account{
 	"alice": {ID: "00000000-0000-4000-8000-000000000003", Contact: "alice@example.com", Handle: "alice", DisplayName: "Alice", Secret: "alice passphrase for tests"},
 	"bob":   {ID: "00000000-0000-4000-8000-000000000001", Contact: "bob@example.com", Handle: "bob", DisplayName: "Bob", Secret: "bob passphrase for tests"},
 	"carol": {ID: "00000000-0000-4000-8000-000000000002", Contact: "carol@example.com", Handle: "carol", DisplayName: "Carol", Secret: "carol passphrase for tests"},
 }
 
 var (
-	fixedHashesOnce sync.Once
-	fixedHashes     map[string]domain.SecretHash
-	fixedHashesErr  error
+	presetHashesOnce sync.Once
+	presetHashes     map[string]domain.SecretHash
+	presetHashesErr  error
 )
 
-// fixedHash は、固定の利用者の、保管する形の秘密を返す。計算は、テストのプロセスで、1回だけ行う。
-func fixedHash(t *testing.T, name string) domain.SecretHash {
+// presetHash は、あらかじめ置く利用者の、保管する形の秘密を返す。計算は、テストのプロセスで、1回だけ行う。
+func presetHash(t *testing.T, name string) domain.SecretHash {
 	t.Helper()
-	fixedHashesOnce.Do(func() {
-		fixedHashes = map[string]domain.SecretHash{}
-		for name, a := range fixedAccounts {
+	presetHashesOnce.Do(func() {
+		presetHashes = map[string]domain.SecretHash{}
+		for name, a := range presetAccounts {
 			secret, err := domain.NewSecret(a.Secret, domain.RestoreContact(a.Contact), a.Handle)
 			if err != nil {
-				fixedHashesErr = err
+				presetHashesErr = err
 				return
 			}
 			hash, err := testHasher.Hash(context.Background(), secret)
 			if err != nil {
-				fixedHashesErr = err
+				presetHashesErr = err
 				return
 			}
-			fixedHashes[name] = hash
+			presetHashes[name] = hash
 		}
 	})
-	if fixedHashesErr != nil {
-		t.Fatal(fixedHashesErr)
+	if presetHashesErr != nil {
+		t.Fatal(presetHashesErr)
 	}
-	return fixedHashes[name]
+	return presetHashes[name]
 }
 
-// ensureFixed は、固定の利用者の行が、保管先にあるようにする。
-func (s *testServer) ensureFixed(name string) account {
+// ensurePreset は、あらかじめ置く利用者の行が、保管先にあるようにする。
+func (s *testServer) ensurePreset(name string) account {
 	s.t.Helper()
-	a, ok := fixedAccounts[name]
+	a, ok := presetAccounts[name]
 	if !ok {
-		s.t.Fatalf("固定の利用者ではない: %q", name)
+		s.t.Fatalf("あらかじめ置く利用者ではない: %q", name)
 	}
 	_, err := s.pool.Exec(context.Background(),
 		`INSERT INTO users (id, contact, handle, display_name, secret_hash) VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (id) DO NOTHING`,
-		a.ID, a.Contact, a.Handle, a.DisplayName, string(fixedHash(s.t, name)))
+		a.ID, a.Contact, a.Handle, a.DisplayName, string(presetHash(s.t, name)))
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -428,19 +428,19 @@ func (s *testServer) mustLoginIn(contact, secret, cookie string) *browser {
 	return &browser{Cookie: c.Value, SessionID: out.SessionId}
 }
 
-// newBrowser は、固定の利用者として、新しいブラウザで、ログインする。
+// newBrowser は、あらかじめ置く利用者として、新しいブラウザで、ログインする。
 func (s *testServer) newBrowser(name string) *browser {
 	s.t.Helper()
-	a := s.ensureFixed(name)
+	a := s.ensurePreset(name)
 	return s.mustLogin(a.Contact, a.Secret)
 }
 
-// as は、名前に当たる、既定のブラウザを返す。固定の利用者(alice、bob、carol)は、最初に使うときに、
+// as は、名前に当たる、既定のブラウザを返す。あらかじめ置く利用者(alice、bob、carol)は、最初に使うときに、
 // 行を作って、ログインする。そのほかの名前(空を含む)は、何も添えないブラウザになる
 // (ログイン状態がない要求を送るために使う)。
 func (s *testServer) as(name string) *browser {
 	s.t.Helper()
-	if _, ok := fixedAccounts[name]; !ok {
+	if _, ok := presetAccounts[name]; !ok {
 		return &browser{}
 	}
 	s.mu.Lock()

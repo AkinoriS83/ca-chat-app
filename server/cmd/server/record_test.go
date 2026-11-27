@@ -20,7 +20,7 @@ func TestEvents_AreRecordedWithSourceAndUser(t *testing.T) {
 	s := startServer(t, withLimits(func(r *domain.LimitRules) {
 		r.PeerLookupPerUser = domain.LimitRule{Count: 1, Window: time.Hour}
 	}))
-	a := fixedAccounts["alice"]
+	a := presetAccounts["alice"]
 
 	s.mustRegister(dave)
 	daveID := s.userID(dave.Contact)
@@ -167,7 +167,7 @@ func TestLogsAndResponses_DoNotContainSecretsOrPersonalData(t *testing.T) {
 	if strings.Contains(strings.ToLower(logs), strings.ToLower(marker)) {
 		t.Fatalf("ログに、記録しないと定めたものが含まれる:\n%s", logs)
 	}
-	for _, forbidden := range append(credentials, "alice@example.com", fixedAccounts["alice"].Secret, "argon2id") {
+	for _, forbidden := range append(credentials, "alice@example.com", presetAccounts["alice"].Secret, "argon2id") {
 		if strings.Contains(logs, forbidden) {
 			t.Fatalf("ログに、資格か、連絡先か、秘密が含まれる(%d 文字の値)", len(forbidden))
 		}
@@ -288,7 +288,7 @@ func TestTemporaryLogin_IsGone(t *testing.T) {
 func TestOtherOrigin_IsRejectedForAccountOperations(t *testing.T) {
 	s := startServer(t)
 	alice := s.as("alice")
-	a := fixedAccounts["alice"]
+	a := presetAccounts["alice"]
 	credential := s.mustRequestSignup(dave.Contact, dave.Contact)
 	noticesBefore := len(s.notices.all())
 
@@ -315,7 +315,7 @@ func TestOtherOrigin_IsRejectedForAccountOperations(t *testing.T) {
 		}
 	}
 	// どの操作も、行われていない。
-	if len(s.notices.all()) != noticesBefore || s.count("users") != fixedUserCount || s.count("sessions") != 1 {
+	if len(s.notices.all()) != noticesBefore || s.count("users") != presetUserCount || s.count("sessions") != 1 {
 		t.Fatal("他のオリジンからの操作が、行われた")
 	}
 	s.requireAuthenticatedAs(alice, "alice")

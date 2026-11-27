@@ -76,7 +76,7 @@ func TestSignup_RequestCompleteAndLogin(t *testing.T) {
 	if sessionCookieOf(completed) != nil || s.count("sessions") != 0 {
 		t.Fatal("登録の完了で、ログイン状態を与えた")
 	}
-	if s.count("users") != fixedUserCount+1 || s.count("signups") != 0 {
+	if s.count("users") != presetUserCount+1 || s.count("signups") != 0 {
 		t.Fatalf("利用者か、申し込みの行の数が違う: %d, %d", s.count("users"), s.count("signups"))
 	}
 
@@ -119,7 +119,7 @@ func TestSignup_NothingExistsBeforeCompletion(t *testing.T) {
 func TestSignup_RegisteredContactGetsSameResponse(t *testing.T) {
 	s := startServer(t)
 	alice := s.as("alice")
-	a := fixedAccounts["alice"]
+	a := presetAccounts["alice"]
 	var hashBefore string
 	if err := s.pool.QueryRow(context.Background(), "SELECT secret_hash FROM users WHERE contact = $1", a.Contact).Scan(&hashBefore); err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestSignup_RegisteredContactGetsSameResponse(t *testing.T) {
 		t.Fatalf("送った案内が違う: %+v", notices)
 	}
 	// 申し込みは、置かれない。置かれるのは、登録されていない連絡先のものだけである。
-	if s.count("users") != fixedUserCount || s.count("signups") != 1 {
+	if s.count("users") != presetUserCount || s.count("signups") != 1 {
 		t.Fatalf("利用者か、申し込みの行の数が違う: %d, %d", s.count("users"), s.count("signups"))
 	}
 	var hashAfter string
@@ -200,7 +200,7 @@ func TestSignup_InvalidCredentials(t *testing.T) {
 		for _, resp := range []response{usedAgain, wrong, empty} {
 			requireSameResponse(t, atExpiry, resp)
 		}
-		if got := s.count("users"); got != fixedUserCount+1 {
+		if got := s.count("users"); got != presetUserCount+1 {
 			t.Fatalf("利用者の行の数が違う: %d", got)
 		}
 	})
@@ -232,7 +232,7 @@ func TestSignup_ConcurrentCompletionsWithSameCredential(t *testing.T) {
 			requireError(t, resp, http.StatusBadRequest, "invalid_signup_credential")
 		}
 	}
-	if completed != 1 || s.count("users") != fixedUserCount+1 {
+	if completed != 1 || s.count("users") != presetUserCount+1 {
 		t.Fatalf("完了した数が違う: %d", completed)
 	}
 }
@@ -284,7 +284,7 @@ func TestSignup_InvalidFields(t *testing.T) {
 	raw := `{"signupCredential":"` + credential + `","handle":"` + dave.Handle + `","displayName":"a` + lone + `","secret":"` + strings.Repeat("a", 15) + lone + `"}`
 	requireInvalidFields(t, s.do(http.MethodPost, "/api/users", map[string]string{"Content-Type": "application/json"}, []byte(raw)), "displayName", "secret")
 
-	if s.count("users") != fixedUserCount || s.count("signups") != 1 {
+	if s.count("users") != presetUserCount || s.count("signups") != 1 {
 		t.Fatal("拒否した完了で、利用者を作ったか、申し込みを使用済みにした")
 	}
 
@@ -301,7 +301,7 @@ func TestSignup_HandleTaken(t *testing.T) {
 	for _, handle := range []string{"alice", "ALICE", "Alice"} {
 		requireError(t, s.completeSignup(credential, handle, dave.DisplayName, dave.Secret), http.StatusConflict, "handle_taken")
 	}
-	if s.count("users") != fixedUserCount || s.count("signups") != 1 {
+	if s.count("users") != presetUserCount || s.count("signups") != 1 {
 		t.Fatal("拒否した完了で、利用者を作ったか、申し込みを使用済みにした")
 	}
 
@@ -342,7 +342,7 @@ func TestSignup_ConcurrentCompletionsWithSameHandle(t *testing.T) {
 			requireError(t, resp, http.StatusConflict, "handle_taken")
 		}
 	}
-	if completed != 1 || s.count("users") != fixedUserCount+1 || s.count("signups") != n-1 {
+	if completed != 1 || s.count("users") != presetUserCount+1 || s.count("signups") != n-1 {
 		t.Fatalf("完了した数が違う: %d", completed)
 	}
 }
@@ -389,7 +389,7 @@ func TestSignup_NoticeFailure(t *testing.T) {
 	s.notices.setFailure(errors.New("smtp is down"))
 
 	unregistered := s.requestSignup(dave.Contact)
-	registered := s.requestSignup(fixedAccounts["alice"].Contact)
+	registered := s.requestSignup(presetAccounts["alice"].Contact)
 
 	requireError(t, unregistered, http.StatusInternalServerError, "internal")
 	requireNoInternals(t, unregistered)
@@ -457,7 +457,7 @@ func TestSignup_DisplayNameIsStoredAsText(t *testing.T) {
 		}
 		aliceConn.close()
 	}
-	if got := s.count("users"); got != fixedUserCount+len(names) {
+	if got := s.count("users"); got != presetUserCount+len(names) {
 		t.Fatalf("利用者の表が、変わった: %d", got)
 	}
 }
