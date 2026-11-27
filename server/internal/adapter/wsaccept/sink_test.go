@@ -74,7 +74,7 @@ func TestSink_ConcurrentSendAndClose(t *testing.T) {
 	wg.Wait()
 }
 
-// DD-28: 閉じた理由を、印として持つ。最初に閉じた理由が、残る。
+// 閉じた理由を、印として持つ。最初に閉じた理由が、残る。
 func TestSink_CloseReason(t *testing.T) {
 	t.Run("ログイン状態が無効になった", func(t *testing.T) {
 		s := newSink()

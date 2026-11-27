@@ -1,6 +1,6 @@
 # ADR-019 ログイン状態を確かめる層と、ユースケースに渡す形
 
-- ステータス: active
+- ステータス: frozen
 - 作成日: 2026-11-27
 - 対象: 登録とログイン([仕様](../specs/registration-and-login.md)「ログイン状態」、RL-15、RL-23)。[ADR-013](ADR-013-temporary-login-identity.md) の Consequences の見込みを、改める
 

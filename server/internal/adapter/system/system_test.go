@@ -30,7 +30,7 @@ func TestNewCredential(t *testing.T) {
 	}
 }
 
-// DD-05: 時刻は、UTC で、保管先の精度(マイクロ秒)に丸める。
+// 時刻は、UTC で、保管先の精度(マイクロ秒)に丸める。
 func TestClock_Now(t *testing.T) {
 	before := time.Now().Add(-time.Microsecond)
 	now := Clock{}.Now()

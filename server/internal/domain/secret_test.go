@@ -76,7 +76,7 @@ func TestNewSecret_Rejects(t *testing.T) {
 	}
 }
 
-// DD-21: 文字列にする操作は、値を返さない。書式とログでの確認は、cmd/server のテストにある
+// 文字列にする操作は、値を返さない。書式とログでの確認は、cmd/server のテストにある
 // (domain のテストは、書式とログの標準ライブラリを import できない)。
 func TestSecret_StringDoesNotExposeValue(t *testing.T) {
 	const raw = "marker-secret-value-123"

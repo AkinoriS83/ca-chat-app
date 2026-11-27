@@ -160,7 +160,7 @@ func TestVerify_MalformedStoredHash(t *testing.T) {
 	}
 }
 
-// DD-11: 同時に行う計算は、MaxConcurrent までである。超える分は、順番を待ち、待つ間に取り消されたら、やめる。
+// 同時に行う計算は、MaxConcurrent までである。超える分は、順番を待ち、待つ間に取り消されたら、やめる。
 func TestCompute_LimitsConcurrency(t *testing.T) {
 	h := NewHasher()
 	// 枠を、すべて埋める。

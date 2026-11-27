@@ -5,7 +5,7 @@ import { BrowserTimer } from './browserTimer'
 import { CryptoSendIdSource } from './cryptoSendIdSource'
 import { LocationEntryLink } from './locationEntryLink'
 
-describe('LocationEntryLink(DD-03、RL-33)', () => {
+describe('LocationEntryLink(RL-33)', () => {
   afterEach(() => {
     history.replaceState(null, '', '/')
   })

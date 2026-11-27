@@ -304,7 +304,7 @@ func TestCompleteSignup_HandleTaken(t *testing.T) {
 	}
 }
 
-// RL-05、DD-38: トランザクションの中で、申し込みが使えなくなっていた完了(同時の完了)と、
+// RL-05: トランザクションの中で、申し込みが使えなくなっていた完了(同時の完了)と、
 // 連絡先が登録済みであった完了は、資格が無効な場合として拒否する。
 func TestCompleteSignup_RaceIsInvalidCredential(t *testing.T) {
 	in := CompleteSignupInput{Handle: "dave", DisplayName: "Dave", Secret: newSecret, Source: source}

@@ -1,6 +1,6 @@
 # ADR-017 よく使われる秘密の一覧
 
-- ステータス: active
+- ステータス: frozen
 - 作成日: 2026-11-27
 - 対象: 登録とログイン([仕様](../specs/registration-and-login.md)「技術要素の決定」)
 

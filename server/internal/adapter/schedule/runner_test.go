@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// DD-06: 片付けを、起動の直後と、以後、間隔ごとに呼ぶ。エラーが返っても、続ける。終了の合図で、止まる。
+// 片付けを、起動の直後と、以後、間隔ごとに呼ぶ。エラーが返っても、続ける。終了の合図で、止まる。
 func TestRun(t *testing.T) {
 	var calls atomic.Int32
 	third := make(chan struct{})

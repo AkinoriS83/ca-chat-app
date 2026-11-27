@@ -30,7 +30,7 @@ func TestLogin_GrantsNewSession(t *testing.T) {
 		t.Fatalf("置いたログイン状態が違う: %+v", got)
 	}
 
-	// 失敗として数えた1回を、戻す。送信元ごとは、1回を戻し、連絡先ごとは、0に戻す(DD-24)。
+	// 失敗として数えた1回を、戻す。送信元ごとは、1回を戻し、連絡先ごとは、0に戻す。
 	contact := domain.RestoreContact(aliceContact)
 	if want := []domain.Limit{w.rules.LoginFailureBySource(source), w.rules.LoginFailureByContact(contact)}; !reflect.DeepEqual(w.limiter.admitted, want) {
 		t.Fatalf("数えたものが違う: %+v", w.limiter.admitted)
@@ -55,7 +55,7 @@ func TestLogin_GrantsNewSession(t *testing.T) {
 	}
 }
 
-// RL-14、DD-27: ログイン状態を持つブラウザでのログインは、それまでのログイン状態を無効にしてから、
+// RL-14: ログイン状態を持つブラウザでのログインは、それまでのログイン状態を無効にしてから、
 // その接続を閉じ、新しいログイン状態を与える。
 func TestLogin_RevokesPreviousSessionOfBrowser(t *testing.T) {
 	w := newWorld()
@@ -232,7 +232,7 @@ func TestCurrentSession(t *testing.T) {
 	})
 }
 
-// RL-17、DD-27: ログアウトは、ログイン状態を無効にしてから、そのログイン状態による接続を閉じる。
+// RL-17: ログアウトは、ログイン状態を無効にしてから、そのログイン状態による接続を閉じる。
 func TestLogout(t *testing.T) {
 	w := newWorld()
 	actor := w.sessions.login(alice, "c1")
@@ -329,7 +329,7 @@ func TestSessionGate_StoreFailure(t *testing.T) {
 	requireEvents(t, w.events, domain.EventOperationFailed)
 }
 
-// DD-06: 片付けは、期限に達した接続を閉じ、期限を過ぎたログイン状態と、申し込みを消す。同じ時刻を渡す。
+// 片付けは、期限に達した接続を閉じ、期限を過ぎたログイン状態と、申し込みを消す。同じ時刻を渡す。
 func TestSweep(t *testing.T) {
 	w := newWorld()
 	w.clock.now = testNow.Add(42)

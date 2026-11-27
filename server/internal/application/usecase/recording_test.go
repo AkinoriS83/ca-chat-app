@@ -16,7 +16,7 @@ type failureCase struct {
 	call      func(t *testing.T, w *world) error
 }
 
-// RL-32、DD-39: ユースケースの公開するメソッドは、どのポートが失敗しても、完了できなかったことを返し、
+// RL-32: ユースケースの公開するメソッドは、どのポートが失敗しても、完了できなかったことを返し、
 // operation_failed を、1回だけ記録する。記録の通り道(attempt)を通さないメソッドを加えると、
 // このテストが検出する。公開するメソッドを加えたときは、ここに加える。
 func TestOperationFailure_IsRecordedExactlyOnce(t *testing.T) {

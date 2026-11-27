@@ -189,7 +189,7 @@ func TestLogsAndResponses_DoNotContainSecretsOrPersonalData(t *testing.T) {
 	}
 }
 
-// DD-21: 秘密の型を、書式と、ログの JSON で出力しても、値が現れない。
+// 秘密の型を、書式と、ログの JSON で出力しても、値が現れない。
 // (domain のテストは、書式とログの標準ライブラリを import できないため、ここに置く。)
 func TestSecret_IsRedactedInFormattingAndLogs(t *testing.T) {
 	const raw = "marker-secret-value-0123456789"

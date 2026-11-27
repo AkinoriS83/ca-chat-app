@@ -1,6 +1,6 @@
 # ADR-021 出来事の記録を行う層
 
-- ステータス: active
+- ステータス: frozen
 - 作成日: 2026-11-27
 - 対象: 登録とログイン([仕様](../specs/registration-and-login.md)「記録」、RL-32、RL-33)
 

@@ -164,7 +164,7 @@ describe('アプリを開く(C-13、RL-21、RL-23)', () => {
     expect(session()).toEqual({ kind: 'signedIn', user: alice, logout: 'idle' })
   })
 
-  it('案内の資格があれば、ログイン状態を確かめずに、登録を続ける画面を示す(DD-34)', () => {
+  it('案内の資格があれば、ログイン状態を確かめずに、登録を続ける画面を示す', () => {
     const { app, auth, entry, session } = setup('signup-credential')
 
     app.start()

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { REDACTED_API_PATH, redactApiPaths, redactingLogger } from './redactApiPaths'
 
-// RL-33、DD-36: クライアントの開発用のサーバーの記録に、識別名(要求のパスの一部)が、含まれない。
+// RL-33: クライアントの開発用のサーバーの記録に、識別名(要求のパスの一部)が、含まれない。
 
 describe('redactApiPaths', () => {
   it.each([

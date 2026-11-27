@@ -124,7 +124,7 @@ func TestCreateUser_HandleTaken(t *testing.T) {
 	}
 }
 
-// DD-38: 登録済みの連絡先での作成は、port.ErrContactTaken になる。
+// 登録済みの連絡先での作成は、port.ErrContactTaken になる。
 func TestCreateUser_ContactTaken(t *testing.T) {
 	store, pool := newTestStore(t)
 	mustUser(t, store, "alice@example.com", "alice", "Alice")

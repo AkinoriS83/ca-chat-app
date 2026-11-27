@@ -126,7 +126,7 @@ func TestLockout_OldFailuresAreNotCounted(t *testing.T) {
 	requireAdmit(t, l, later, false, limit)
 }
 
-// DD-24: Forgive は、数えた1回を戻し、Reset は、0に戻す(拒否の間も、解く)。
+// Forgive は、数えた1回を戻し、Reset は、0に戻す(拒否の間も、解く)。
 func TestForgiveAndReset(t *testing.T) {
 	l := NewLimiter()
 	bySource := windowLimit("192.0.2.1", 2, time.Hour)
@@ -192,7 +192,7 @@ func TestAdmit_ConcurrentRequestsDoNotExceedLimit(t *testing.T) {
 	}
 }
 
-// DD-07: 数える時間を過ぎた計数は、メモリから消す。拒否の間の計数は、残す。
+// 数える時間を過ぎた計数は、メモリから消す。拒否の間の計数は、残す。
 func TestSweep_RemovesIdleCounters(t *testing.T) {
 	l := NewLimiter()
 	for _, subject := range []string{"a", "b", "c"} {

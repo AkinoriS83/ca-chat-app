@@ -134,7 +134,7 @@ func TestHistory_Rejections(t *testing.T) {
 	s.requireStored(1, 1)
 }
 
-// RL-15、DD-18: ログイン状態の確認は、形式の検証より先に行う(api/openapi.yaml「拒否とエラーの応答」の順)。
+// RL-15: ログイン状態の確認は、形式の検証より先に行う(api/openapi.yaml「拒否とエラーの応答」の順)。
 func TestSend_SessionIsCheckedBeforeFormat(t *testing.T) {
 	s := startServer(t)
 

@@ -297,7 +297,7 @@ func TestSend_QuitFailureIsNotFailure(t *testing.T) {
 	}
 }
 
-// RL-10: 接続できない場合と、相手が応答しない場合も、エラーを返す。待つ時間には、上限がある(DD-13)。
+// RL-10: 接続できない場合と、相手が応答しない場合も、エラーを返す。待つ時間には、上限がある。
 func TestSend_ConnectionFailureAndTimeout(t *testing.T) {
 	to := domain.RestoreContact("marker-recipient@example.com")
 

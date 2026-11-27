@@ -21,7 +21,7 @@ func TestAccept_RegistersConnectionWithSession(t *testing.T) {
 	if got, ok := w.registry.registered[sink]; !ok || got != want || got.UserID != alice.ID {
 		t.Fatalf("接続が、ログイン状態と対応付けて登録されていない: %+v, %v", got, ok)
 	}
-	// 登録の前と、後の、2回、確かめる(DD-26)。
+	// 登録の前と、後の、2回、確かめる。
 	if w.sessions.finds != 2 {
 		t.Fatalf("ログイン状態を確かめた回数が違う: %d", w.sessions.finds)
 	}
@@ -45,7 +45,7 @@ func TestAccept_RejectsUnauthenticatedWithoutRegistering(t *testing.T) {
 	}
 }
 
-// DD-18: WebSocket の接続を確立する要求でない要求は、ログイン状態の確認の後に、拒否する。接続は、登録しない。
+// WebSocket の接続を確立する要求でない要求は、ログイン状態の確認の後に、拒否する。接続は、登録しない。
 func TestAccept_RejectsMalformedAfterAuthentication(t *testing.T) {
 	w := newWorld().loginAll()
 
@@ -57,7 +57,7 @@ func TestAccept_RejectsMalformedAfterAuthentication(t *testing.T) {
 	}
 }
 
-// DD-26: 確かめてから登録するまでの間に、ログイン状態が無効になった接続は、登録を解いて、拒否する。
+// 確かめてから登録するまでの間に、ログイン状態が無効になった接続は、登録を解いて、拒否する。
 func TestAccept_SessionRevokedBetweenVerificationAndRegistration(t *testing.T) {
 	w := newWorld().loginAll()
 	sink := &fakeSink{}
